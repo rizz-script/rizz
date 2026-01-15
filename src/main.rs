@@ -33,6 +33,8 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Print version
+    Version,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -49,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
                         let src = tokio::fs::read_to_string(&file).await?;
                         let program =
                             rizzscript::parser::parse_program(&src, file.to_string_lossy().as_ref())?;
+                        rizzscript::typecheck::typecheck(&program)?;
                         let mut rt =
                             rizzscript::runtime::Runtime::new(file.to_string_lossy().as_ref(), args);
                         rt.exec_program(&program).await?;
@@ -72,6 +75,9 @@ Vibe main()
                 }
                 Command::Format { path, check } => {
                     format_paths(&path, check)?;
+                }
+                Command::Version => {
+                    println!("{}", env!("CARGO_PKG_VERSION"));
                 }
             }
             Ok::<(), anyhow::Error>(())

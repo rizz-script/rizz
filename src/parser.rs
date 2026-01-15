@@ -1,6 +1,6 @@
 use anyhow::{bail, Context};
 
-use crate::ast::{Block, Expr, Lit, ObjKey, Program, Span, Stmt};
+use crate::ast::{Block, Expr, Lit, ObjKey, Param, Program, Span, Stmt, TypeName};
 use crate::lexer::{lex, Kind, Token};
 
 #[derive(Debug)]
@@ -168,11 +168,13 @@ impl Parser {
         if self.at(Kind::Ayo) || self.at(Kind::Let) {
             self.advance();
             let name = self.expect(Kind::Ident)?;
+            let ty = self.parse_type_annotation()?;
             self.expect(Kind::Eq)?;
             let value = self.parse_expr(0, &[])?;
             return Ok(Stmt::VarDecl {
                 span: self.span(&t),
                 name: name.value,
+                ty,
                 value,
             });
         }
@@ -180,11 +182,13 @@ impl Parser {
         if self.at(Kind::Yoo) || self.at(Kind::Const) {
             self.advance();
             let name = self.expect(Kind::Ident)?;
+            let ty = self.parse_type_annotation()?;
             self.expect(Kind::Eq)?;
             let value = self.parse_expr(0, &[])?;
             return Ok(Stmt::ConstDecl {
                 span: self.span(&t),
                 name: name.value,
+                ty,
                 value,
             });
         }
@@ -193,11 +197,16 @@ impl Parser {
             self.advance();
             let name = self.expect(Kind::Ident)?;
             self.expect(Kind::LParen)?;
-            let mut params = Vec::new();
+            let mut params: Vec<Param> = Vec::new();
             if !self.at(Kind::RParen) {
                 loop {
                     let p = self.expect(Kind::Ident)?;
-                    params.push(p.value);
+                    let ty = self.parse_type_annotation()?;
+                    params.push(Param {
+                        span: self.span(&p),
+                        name: p.value,
+                        ty,
+                    });
                     if self.match_kind(Kind::Comma).is_none() {
                         break;
                     }
@@ -205,12 +214,14 @@ impl Parser {
             }
             self.expect(Kind::RParen)?;
             let is_async = self.match_kind(Kind::HawkTuah).is_some();
+            let ret_ty = self.parse_type_annotation()?;
             let body = self.parse_block()?;
             return Ok(Stmt::FuncDef {
                 span: self.span(&t),
                 name: name.value,
                 params,
                 is_async,
+                ret_ty,
                 body,
             });
         }
@@ -652,6 +663,19 @@ impl Parser {
                 t.value
             ),
         }
+    }
+
+    fn parse_type_annotation(&mut self) -> anyhow::Result<Option<TypeName>> {
+        if self.match_kind(Kind::Colon).is_none() {
+            return Ok(None);
+        }
+        // allow optional whitespace/newlines after :
+        self.skip_newlines();
+        let t = self.expect(Kind::Ident)?;
+        Ok(Some(TypeName {
+            span: self.span(&t),
+            name: t.value,
+        }))
     }
 }
 

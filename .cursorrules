@@ -1,0 +1,16 @@
+# Cursor / Agent Rules for this repo
+
+## General
+- Prefer incremental changes and frequent commits.
+- Keep compatibility with Rust 1.82 / Cargo 1.82 (avoid crates requiring newer editions).
+- Run `cargo build` after changes to core runtime/parser/cli.
+
+## Language core
+- Maintain backwards compatibility with slang keywords (Ayo/Yoo/Bruh/Maybe/etc).
+- When adding JS-like syntax, keep it as aliases rather than breaking existing syntax.
+- Favor clear errors with filename/line/col.
+
+## Code quality
+- Fix compiler warnings you introduce.
+- Avoid long-lived commands/processes in automation.
+

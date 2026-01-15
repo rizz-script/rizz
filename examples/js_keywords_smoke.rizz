@@ -1,6 +1,6 @@
 function main() {
-  const x = 1
-  let y = 2
+  const x: int = 1
+  let y: int = 2
   y = y + x
   return y
 }
