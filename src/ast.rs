@@ -21,14 +21,25 @@ pub struct Block {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    VarDecl { span: Span, name: String, value: Expr },
-    ConstDecl { span: Span, name: String, value: Expr },
+    VarDecl {
+        span: Span,
+        name: String,
+        ty: Option<TypeName>,
+        value: Expr,
+    },
+    ConstDecl {
+        span: Span,
+        name: String,
+        ty: Option<TypeName>,
+        value: Expr,
+    },
     Assign { span: Span, name: String, value: Expr },
     FuncDef {
         span: Span,
         name: String,
-        params: Vec<String>,
+        params: Vec<Param>,
         is_async: bool,
+        ret_ty: Option<TypeName>,
         body: Block,
     },
     Return { span: Span, value: Option<Expr> },
@@ -70,6 +81,19 @@ pub enum Stmt {
     },
     WhileLoop { span: Span, cond: Expr, body: Block },
     ExprStmt { span: Span, expr: Expr },
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeName {
+    pub span: Span,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub span: Span,
+    pub name: String,
+    pub ty: Option<TypeName>,
 }
 
 #[derive(Debug, Clone)]

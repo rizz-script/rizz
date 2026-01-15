@@ -95,10 +95,21 @@ impl Value {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct Scope {
     values: BTreeMap<String, Value>,
     consts: BTreeMap<String, bool>,
+    types: BTreeMap<String, crate::types::TypeId>,
+}
+
+impl Default for Scope {
+    fn default() -> Self {
+        Self {
+            values: BTreeMap::new(),
+            consts: BTreeMap::new(),
+            types: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -127,11 +138,36 @@ impl Env {
     }
 
     fn define(&mut self, name: &str, value: Value, is_const: bool) {
+        // untyped define (legacy)
         let scope = self.scopes.last_mut().expect("at least one scope");
         scope.values.insert(name.to_string(), value);
         if is_const {
             scope.consts.insert(name.to_string(), true);
         }
+    }
+
+    fn define_typed(
+        &mut self,
+        name: &str,
+        value: Value,
+        is_const: bool,
+        ty: Option<crate::types::TypeId>,
+    ) -> anyhow::Result<()> {
+        if let Some(t) = &ty {
+            let from = crate::types::value_type(&value);
+            if !crate::types::is_assignable(t, &from) {
+                bail!("Type error: expected {:?} for {}, got {:?}", t, name, from);
+            }
+        }
+        let scope = self.scopes.last_mut().expect("at least one scope");
+        scope.values.insert(name.to_string(), value);
+        if is_const {
+            scope.consts.insert(name.to_string(), true);
+        }
+        if let Some(t) = ty {
+            scope.types.insert(name.to_string(), t);
+        }
+        Ok(())
     }
 
     fn get(&self, name: &str) -> anyhow::Result<Value> {
@@ -148,6 +184,12 @@ impl Env {
             if scope.values.contains_key(name) {
                 if scope.consts.get(name).copied().unwrap_or(false) {
                     bail!("Cannot assign to constant: {name}");
+                }
+                if let Some(t) = scope.types.get(name) {
+                    let from = crate::types::value_type(&value);
+                    if !crate::types::is_assignable(t, &from) {
+                        bail!("Type error: expected {:?} for {}, got {:?}", t, name, from);
+                    }
                 }
                 scope.values.insert(name.to_string(), value);
                 return Ok(());
@@ -538,13 +580,15 @@ impl Runtime {
                     }
                 }
             }
-            Stmt::VarDecl { name, value, .. } => {
+            Stmt::VarDecl { name, ty, value, .. } => {
                 let v = self.eval_expr(value, env, frame).await?;
-                env.define(name, v, false);
+                let t = ty.as_ref().map(|tn| crate::types::parse_type(&tn.name));
+                env.define_typed(name, v, false, t)?;
             }
-            Stmt::ConstDecl { name, value, .. } => {
+            Stmt::ConstDecl { name, ty, value, .. } => {
                 let v = self.eval_expr(value, env, frame).await?;
-                env.define(name, v, true);
+                let t = ty.as_ref().map(|tn| crate::types::parse_type(&tn.name));
+                env.define_typed(name, v, true, t)?;
             }
             Stmt::Assign { name, value, .. } => {
                 let v = self.eval_expr(value, env, frame).await?;
@@ -553,7 +597,7 @@ impl Runtime {
             Stmt::FuncDef { name, params, body, .. } => {
                 let f = UserFunction {
                     name: name.clone(),
-                    params: params.clone(),
+                    params: params.iter().map(|p| p.name.clone()).collect(),
                     body: body.clone(),
                     closure: env.clone(),
                 };
@@ -1243,7 +1287,7 @@ async fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<(Value, Opt
         }
     }
     let header_end = header_end.ok_or_else(|| anyhow!("Invalid HTTP request (no header terminator)"))?;
-    let (head, mut rest) = buf.split_at(header_end);
+    let (head, rest) = buf.split_at(header_end);
 
     let head_str = String::from_utf8_lossy(head);
     let mut lines = head_str.split("\r\n").filter(|l| !l.is_empty());
