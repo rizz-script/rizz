@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail};
@@ -12,6 +13,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tokio::process::Command;
 
+use crate::parser::parse_program;
 use crate::ast::{Block, Expr, Lit, ObjKey, Program, Stmt};
 
 #[derive(Clone)]
@@ -287,15 +289,28 @@ pub struct Runtime {
     globals: Env,
     client: reqwest::Client,
     tasks: Vec<Rc<RefCell<Option<JoinHandle<anyhow::Result<Value>>>>>>,
+    module_cache: Rc<RefCell<HashMap<String, Value>>>,
+    current_exports: Option<Rc<RefCell<BTreeMap<String, Value>>>>,
 }
 
 impl Runtime {
     pub fn new(filename: &str, args: Vec<String>) -> Self {
+        let cache: Rc<RefCell<HashMap<String, Value>>> = Rc::new(RefCell::new(HashMap::new()));
+        Self::new_with_cache(filename, args, cache)
+    }
+
+    fn new_with_cache(
+        filename: &str,
+        args: Vec<String>,
+        module_cache: Rc<RefCell<HashMap<String, Value>>>,
+    ) -> Self {
         let mut rt = Self {
             filename: filename.to_string(),
             globals: Env::default(),
             client: reqwest::Client::new(),
             tasks: Vec::new(),
+            module_cache,
+            current_exports: None,
         };
         rt.install_builtins();
         rt.install_args(args);
@@ -425,6 +440,43 @@ impl Runtime {
         Ok(())
     }
 
+    async fn load_module(&mut self, spec: &str) -> anyhow::Result<Value> {
+        let base = self.base_dir();
+        let mut path = PathBuf::from(spec);
+        if path.is_relative() {
+            path = base.join(path);
+        }
+        if path.extension().is_none() {
+            path.set_extension("rizz");
+        }
+        let key = path.to_string_lossy().to_string();
+        if let Some(v) = self.module_cache.borrow().get(&key) {
+            return Ok(v.clone());
+        }
+
+        let src = tokio::fs::read_to_string(&path).await?;
+        let program = parse_program(&src, &key)?;
+        let exports: Rc<RefCell<BTreeMap<String, Value>>> = Rc::new(RefCell::new(BTreeMap::new()));
+
+        let mut rt = Runtime::new_with_cache(&key, vec![], self.module_cache.clone());
+        rt.current_exports = Some(exports.clone());
+        rt.exec_program(&program).await?;
+
+        let out = Value::Object(exports.borrow().clone());
+        self.module_cache.borrow_mut().insert(key, out.clone());
+        Ok(out)
+    }
+
+    fn base_dir(&self) -> PathBuf {
+        if self.filename.starts_with('<') {
+            return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        }
+        Path::new(&self.filename)
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
+    }
+
     #[async_recursion::async_recursion(?Send)]
     async fn exec_block(&mut self, block: &Block, env: &mut Env, frame: &mut Frame) -> anyhow::Result<()> {
         for s in &block.statements {
@@ -439,6 +491,31 @@ impl Runtime {
     #[async_recursion::async_recursion(?Send)]
     async fn exec_stmt(&mut self, s: &Stmt, env: &mut Env, frame: &mut Frame) -> anyhow::Result<()> {
         match s {
+            Stmt::Import { name, path, .. } => {
+                let m = self.load_module(path).await?;
+                if let Some(n) = name {
+                    env.define(n, m, true);
+                }
+            }
+            Stmt::Export { names, .. } => {
+                if let Some(exports) = &self.current_exports {
+                    for n in names {
+                        let v = env.get(n)?;
+                        exports.borrow_mut().insert(n.clone(), v);
+                    }
+                }
+            }
+            Stmt::ExportDecl { decl, .. } => {
+                // execute the declaration
+                self.exec_stmt(decl, env, frame).await?;
+                // then export the declared binding (best-effort)
+                if let Some(exports) = &self.current_exports {
+                    if let Some(name) = exported_name(decl.as_ref()) {
+                        let v = env.get(&name)?;
+                        exports.borrow_mut().insert(name, v);
+                    }
+                }
+            }
             Stmt::VarDecl { name, value, .. } => {
                 let v = self.eval_expr(value, env, frame).await?;
                 env.define(name, v, false);
@@ -1452,5 +1529,14 @@ async fn b_fs_rm(args: Vec<Value>) -> anyhow::Result<Value> {
     }
     tokio::fs::remove_file(args[0].as_string()).await?;
     Ok(Value::Null)
+}
+
+fn exported_name(s: &Stmt) -> Option<String> {
+    match s {
+        Stmt::VarDecl { name, .. } => Some(name.clone()),
+        Stmt::ConstDecl { name, .. } => Some(name.clone()),
+        Stmt::FuncDef { name, .. } => Some(name.clone()),
+        _ => None,
+    }
 }
 

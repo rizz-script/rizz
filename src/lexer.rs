@@ -23,6 +23,9 @@ pub enum Kind {
     Try,
     Catch,
     Finally,
+    Import,
+    Export,
+    From,
 
     Ident,
     Int,
@@ -364,6 +367,9 @@ pub fn lex(src: &str) -> anyhow::Result<Vec<Token>> {
                 "try" => Kind::Try,
                 "catch" => Kind::Catch,
                 "finally" => Kind::Finally,
+                "import" => Kind::Import,
+                "export" => Kind::Export,
+                "from" => Kind::From,
                 _ => Kind::Ident,
             };
             push(kind, word, start_line, start_col);

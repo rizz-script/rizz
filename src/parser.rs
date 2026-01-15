@@ -120,6 +120,51 @@ impl Parser {
         self.skip_newlines();
         let t = self.cur().clone();
 
+        if self.at(Kind::Import) {
+            self.advance();
+            // import "path"  OR  import name from "path"
+            if self.at(Kind::Str) {
+                let p = self.advance().value;
+                return Ok(Stmt::Import {
+                    span: self.span(&t),
+                    name: None,
+                    path: p,
+                });
+            }
+            let name = self.expect(Kind::Ident)?.value;
+            self.expect(Kind::From)?;
+            let path = self.expect(Kind::Str)?.value;
+            return Ok(Stmt::Import {
+                span: self.span(&t),
+                name: Some(name),
+                path,
+            });
+        }
+
+        if self.at(Kind::Export) {
+            self.advance();
+            // export <decl> OR export <name>
+            if self.at(Kind::Ayo)
+                || self.at(Kind::Let)
+                || self.at(Kind::Yoo)
+                || self.at(Kind::Const)
+                || self.at(Kind::Bruh)
+                || self.at(Kind::Function)
+            {
+                // parse the declaration directly (without re-consuming export)
+                let decl = self.parse_stmt()?;
+                return Ok(Stmt::ExportDecl {
+                    span: self.span(&t),
+                    decl: Box::new(decl),
+                });
+            }
+            let name = self.expect(Kind::Ident)?.value;
+            return Ok(Stmt::Export {
+                span: self.span(&t),
+                names: vec![name],
+            });
+        }
+
         if self.at(Kind::Ayo) || self.at(Kind::Let) {
             self.advance();
             let name = self.expect(Kind::Ident)?;
