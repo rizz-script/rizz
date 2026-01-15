@@ -10,6 +10,7 @@ use regex::Regex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
+use tokio::process::Command;
 
 use crate::ast::{Block, Expr, Lit, ObjKey, Program, Stmt};
 
@@ -190,6 +191,12 @@ enum BuiltinKind {
     HSet,
     HDel,
     Error,
+    ShellRun,
+    FsReadFile,
+    FsWriteFile,
+    FsAppendFile,
+    FsExists,
+    FsRm,
 }
 
 struct Builtin {
@@ -229,6 +236,12 @@ impl Callable for Builtin {
             BuiltinKind::HSet => b_hset(args).await,
             BuiltinKind::HDel => b_hdel(args).await,
             BuiltinKind::Error => b_error(args).await,
+            BuiltinKind::ShellRun => b_shell_run(args).await,
+            BuiltinKind::FsReadFile => b_fs_read(args).await,
+            BuiltinKind::FsWriteFile => b_fs_write(args).await,
+            BuiltinKind::FsAppendFile => b_fs_append(args).await,
+            BuiltinKind::FsExists => b_fs_exists(args).await,
+            BuiltinKind::FsRm => b_fs_rm(args).await,
         }
     }
 }
@@ -341,6 +354,56 @@ impl Runtime {
         self.globals.define("HSet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HSet })), true);
         self.globals.define("HDel", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HDel })), true);
         self.globals.define("Error", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Error })), true);
+
+        // JS-ish namespaces
+        self.globals.define("Shell", self._shell_object(), true);
+        self.globals.define("FS", self._fs_object(), true);
+    }
+
+    fn _shell_object(&self) -> Value {
+        let mut o = BTreeMap::new();
+        o.insert(
+            "run".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::ShellRun,
+            })),
+        );
+        Value::Object(o)
+    }
+
+    fn _fs_object(&self) -> Value {
+        let mut o = BTreeMap::new();
+        o.insert(
+            "readFile".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsReadFile,
+            })),
+        );
+        o.insert(
+            "writeFile".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsWriteFile,
+            })),
+        );
+        o.insert(
+            "appendFile".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsAppendFile,
+            })),
+        );
+        o.insert(
+            "exists".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsExists,
+            })),
+        );
+        o.insert(
+            "rm".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsRm,
+            })),
+        );
+        Value::Object(o)
     }
 
     pub async fn exec_program(&mut self, program: &Program) -> anyhow::Result<()> {
@@ -1321,5 +1384,73 @@ async fn b_error(args: Vec<Value>) -> anyhow::Result<Value> {
     o.insert("name".to_string(), Value::Str("Error".to_string()));
     o.insert("message".to_string(), Value::Str(args[0].as_string()));
     Ok(Value::Object(o))
+}
+
+async fn b_shell_run(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Shell.run(command)");
+    }
+    let cmd = args[0].as_string();
+    let output = Command::new("sh").arg("-lc").arg(cmd).output().await?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1) as i64;
+
+    if !output.status.success() {
+        let msg = stderr.trim().to_string();
+        if msg.is_empty() {
+            bail!("command failed with exit code {}", code);
+        }
+        bail!("{}", msg);
+    }
+
+    let mut o = BTreeMap::new();
+    o.insert("code".to_string(), Value::Int(code));
+    o.insert("stdout".to_string(), Value::Str(stdout));
+    o.insert("stderr".to_string(), Value::Str(stderr));
+    Ok(Value::Object(o))
+}
+
+async fn b_fs_read(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("FS.readFile(path)");
+    }
+    Ok(Value::Str(tokio::fs::read_to_string(args[0].as_string()).await?))
+}
+
+async fn b_fs_write(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("FS.writeFile(path, text)");
+    }
+    tokio::fs::write(args[0].as_string(), args[1].as_string()).await?;
+    Ok(Value::Null)
+}
+
+async fn b_fs_append(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("FS.appendFile(path, text)");
+    }
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(args[0].as_string())
+        .await?;
+    file.write_all(args[1].as_string().as_bytes()).await?;
+    Ok(Value::Null)
+}
+
+async fn b_fs_exists(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("FS.exists(path)");
+    }
+    Ok(Value::Bool(tokio::fs::try_exists(args[0].as_string()).await?))
+}
+
+async fn b_fs_rm(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("FS.rm(path)");
+    }
+    tokio::fs::remove_file(args[0].as_string()).await?;
+    Ok(Value::Null)
 }
 
