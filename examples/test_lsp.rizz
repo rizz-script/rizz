@@ -1,0 +1,44 @@
+// Test file for LSP hover and go-to-definition
+
+// Function with explicit return type
+Bruh add(a: int, b: int): int {
+  Rizz(a + b)
+}
+
+// Async function with return type
+Bruh fetchData(url: string) HawkTuah : object {
+  Ayo response = Spit(url)
+  Rizz(response)
+}
+
+// Function without explicit return type (should show 'any')
+Bruh greet(name) {
+  Rizz("Hello, " + name)
+}
+
+// Variables with type annotations
+Ayo count: int = 10
+Yoo MESSAGE: string = "Test message"
+
+// Variables with inferred types
+Ayo numbers = [1, 2, 3]
+Yoo PI = 3.14159
+
+// Main function that uses the above
+Bruh main() HawkTuah {
+  // Hovering on 'add' should show function signature with return type
+  Ayo sum = add(5, 3)
+  
+  // Hovering on 'greet' should show function signature
+  greet("RizzScript")
+  
+  // Hovering on 'count' should show variable type
+  Rizz(count)
+  
+  // Cmd+click on 'fetchData' should go to its definition
+  Ayo data = Chill(Vibe fetchData("https://api.example.com"))
+  
+  Rizz("Done!")
+}
+
+Vibe main()

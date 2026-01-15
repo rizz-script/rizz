@@ -20,7 +20,7 @@ Bruh simpleString(str) {
 }
 
 // RESP protocol helper: error
-Bruh errorString(str) {
+Bruh errorString(str : string) {
   Rizz("-" + str + CRLF)
 }
 
@@ -61,7 +61,8 @@ Bruh handleClient(sock) HawkTuah {
     Ayo parts = parseRESP(msg)
 
     Maybe Len(parts) == 0 {
-      Whisper(sock, errorString("ERR empty command"))
+      let errStr = "ERR empty command"
+      Whisper(sock, errorString(errStr))
       Dip(sock)
       Rizz(null)
     }

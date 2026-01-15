@@ -511,12 +511,20 @@ impl DocumentIndex {
                         let inferred = infer_initializer_type(&tokens, i + 2);
                         let ty_s = ty.or(inferred).unwrap_or_else(|| "any".to_string());
                         let kw = if matches!(k, Kind::Yoo | Kind::Const) { "const" } else { "let" };
+                        let rizz_kw = if matches!(k, Kind::Yoo | Kind::Const) { "Yoo" } else { "Ayo" };
+                        let kind_desc = if matches!(k, Kind::Yoo | Kind::Const) { "constant" } else { "variable" };
+                        
+                        let detail = format!(
+                            "```rizz\n{} {}\n```\n**Type:** `{}`\n\n*({} {})*",
+                            rizz_kw, name_tok.value, ty_s, kind_desc, kw
+                        );
+                        
                         defs.push(SymbolDef {
                             name: name_tok.value.clone(),
                             kind: if matches!(k, Kind::Yoo | Kind::Const) { SymbolKind::CONSTANT } else { SymbolKind::VARIABLE },
                             selection_range: token_range(text, name_tok),
                             full_range: token_range(text, name_tok),
-                            detail: format!("`{kw} {}: {ty_s}`", name_tok.value),
+                            detail,
                             defined_at: range_start(token_range(text, name_tok)),
                         });
                     }
@@ -548,11 +556,26 @@ impl DocumentIndex {
     }
 
     fn definition_location(&self, name: &str, pos: Position) -> Option<Location> {
-        // choose closest preceding definition
+        // If clicking on the definition itself, don't navigate (or could show a message)
+        // Otherwise, find closest preceding definition
         let mut best: Option<&SymbolDef> = None;
+        let mut best_distance = i64::MAX;
+        
         for d in self.defs.iter().filter(|d| d.name == name) {
-            if (d.defined_at.line < pos.line) || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character) {
-                best = Some(d);
+            // Skip if cursor is already on the definition
+            if pos_in_range(pos, d.selection_range) {
+                // Still return the location to allow navigation within the same file
+                return Some(Location { uri: self.uri.clone(), range: d.selection_range });
+            }
+            
+            // Find closest preceding definition
+            if d.defined_at.line < pos.line || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character) {
+                let distance = ((pos.line as i64 - d.defined_at.line as i64) * 1000) + 
+                               (pos.character as i64 - d.defined_at.character as i64);
+                if distance < best_distance {
+                    best_distance = distance;
+                    best = Some(d);
+                }
             }
         }
         best.map(|d| Location { uri: self.uri.clone(), range: d.selection_range })
@@ -565,11 +588,24 @@ impl DocumentIndex {
     }
 
     fn hover_info(&self, name: &str, pos: Position) -> Option<String> {
-        // If multiple defs exist, choose closest preceding
+        // If multiple defs exist, choose closest preceding or the one at current position
         let mut best: Option<&SymbolDef> = None;
+        let mut best_distance = i64::MAX;
+        
         for d in self.defs.iter().filter(|d| d.name == name) {
-            if (d.defined_at.line < pos.line) || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character) {
-                best = Some(d);
+            // Check if cursor is within the symbol's range (hovering on definition)
+            if pos_in_range(pos, d.selection_range) {
+                return Some(d.detail.clone());
+            }
+            
+            // Otherwise, find closest preceding definition
+            if d.defined_at.line < pos.line || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character) {
+                let distance = ((pos.line as i64 - d.defined_at.line as i64) * 1000) + 
+                               (pos.character as i64 - d.defined_at.character as i64);
+                if distance < best_distance {
+                    best_distance = distance;
+                    best = Some(d);
+                }
             }
         }
         best.map(|d| d.detail.clone())
@@ -622,6 +658,11 @@ fn token_range(text: &str, t: &Token) -> Range {
 
 fn range_start(r: Range) -> Position {
     r.start
+}
+
+fn pos_in_range(pos: Position, range: Range) -> bool {
+    (pos.line > range.start.line || (pos.line == range.start.line && pos.character >= range.start.character)) &&
+    (pos.line < range.end.line || (pos.line == range.end.line && pos.character <= range.end.character))
 }
 
 fn parse_optional_type(tokens: &[Token], mut i: usize) -> (Option<String>, usize) {
@@ -692,13 +733,26 @@ fn parse_function_signature(tokens: &[Token], name_idx: usize) -> (String, usize
             i += 1;
         }
     }
-    // optional HawkTuah
-    if tokens.get(i).map(|t| t.kind.clone()) == Some(Kind::HawkTuah) {
+    // optional HawkTuah (async marker)
+    let is_async = tokens.get(i).map(|t| t.kind.clone()) == Some(Kind::HawkTuah);
+    if is_async {
         i += 1;
     }
     let (ret, i2) = parse_optional_type(tokens, i);
     let ret_s = ret.unwrap_or_else(|| "any".to_string());
-    let sig = format!("`function {name}({}): {ret_s}`", params.join(", "));
+    
+    // Format signature with return type prominently displayed
+    let async_marker = if is_async { " HawkTuah" } else { "" };
+    let params_str = if params.is_empty() { 
+        String::new() 
+    } else { 
+        params.join(", ") 
+    };
+    
+    let sig = format!(
+        "```rizz\nBruh {}({}){}\n```\n**Returns:** `{}`",
+        name, params_str, async_marker, ret_s
+    );
     (sig, i2)
 }
 

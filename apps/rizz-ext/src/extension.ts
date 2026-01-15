@@ -15,6 +15,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Get LSP server path from configuration
   const config = vscode.workspace.getConfiguration('rizzscript');
   let serverPath = config.get<string>('lsp.path');
+  let turnOnTrace = config.get<boolean>('lsp.trace.server');
 
   // If no custom path, try to find rizz-lsp in PATH or workspace
   if (!serverPath) {
@@ -66,6 +67,9 @@ export async function activate(context: vscode.ExtensionContext) {
   try {
     await client.start();
     vscode.window.showInformationMessage('RizzScript LSP started successfully!');
+    if (turnOnTrace) {
+      console.log('LSP trace is on');
+    }
   } catch (error) {
     vscode.window.showErrorMessage(
       `Failed to start RizzScript LSP: ${error}. Make sure rizz-lsp is built and available.`
