@@ -189,6 +189,7 @@ enum BuiltinKind {
     HGet,
     HSet,
     HDel,
+    Error,
 }
 
 struct Builtin {
@@ -227,6 +228,7 @@ impl Callable for Builtin {
             BuiltinKind::HGet => b_hget(args).await,
             BuiltinKind::HSet => b_hset(args).await,
             BuiltinKind::HDel => b_hdel(args).await,
+            BuiltinKind::Error => b_error(args).await,
         }
     }
 }
@@ -264,6 +266,7 @@ impl Callable for UserFunction {
 #[derive(Default)]
 struct Frame {
     return_value: Option<Value>,
+    returning: bool,
 }
 
 pub struct Runtime {
@@ -337,6 +340,7 @@ impl Runtime {
         self.globals.define("HGet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HGet })), true);
         self.globals.define("HSet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HSet })), true);
         self.globals.define("HDel", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HDel })), true);
+        self.globals.define("Error", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Error })), true);
     }
 
     pub async fn exec_program(&mut self, program: &Program) -> anyhow::Result<()> {
@@ -344,6 +348,9 @@ impl Runtime {
         let mut globals = std::mem::take(&mut self.globals);
         for s in &program.statements {
             self.exec_stmt(s, &mut globals, &mut frame).await?;
+            if frame.returning {
+                break;
+            }
         }
         // Await any "fire-and-forget" tasks spawned by `Vibe` that weren't `Chill`'d.
         for t in self.tasks.iter() {
@@ -359,6 +366,9 @@ impl Runtime {
     async fn exec_block(&mut self, block: &Block, env: &mut Env, frame: &mut Frame) -> anyhow::Result<()> {
         for s in &block.statements {
             self.exec_stmt(s, env, frame).await?;
+            if frame.returning {
+                break;
+            }
         }
         Ok(())
     }
@@ -386,6 +396,60 @@ impl Runtime {
                     closure: env.clone(),
                 };
                 env.define(name, Value::Function(Rc::new(f)), true);
+            }
+            Stmt::Return { value, .. } => {
+                let v = match value {
+                    Some(e) => self.eval_expr(e, env, frame).await?,
+                    None => Value::Null,
+                };
+                frame.return_value = Some(v);
+                frame.returning = true;
+            }
+            Stmt::Throw { value, .. } => {
+                let v = self.eval_expr(value, env, frame).await?;
+                bail!("{}", v.as_string());
+            }
+            Stmt::Try {
+                try_block,
+                catch_name,
+                catch_block,
+                finally_block,
+                ..
+            } => {
+                // try
+                env.push_scope();
+                let try_res = self.exec_block(try_block, env, frame).await;
+                env.pop_scope();
+
+                let mut res = try_res;
+                if res.is_err() && catch_block.is_some() {
+                    let err = res.err().unwrap();
+                    env.push_scope();
+                    if let Some(name) = catch_name {
+                        env.define(name, Value::Str(err.to_string()), false);
+                    }
+                    let cb = catch_block.as_ref().unwrap();
+                    res = self.exec_block(cb, env, frame).await;
+                    env.pop_scope();
+                }
+
+                // finally always runs (even if returning)
+                if let Some(fb) = finally_block {
+                    env.push_scope();
+                    let fin_res = self.exec_block(fb, env, frame).await;
+                    env.pop_scope();
+                    // if finally throws, it overrides prior success/error
+                    if fin_res.is_err() {
+                        res = fin_res;
+                    }
+                }
+
+                // If we were returning from inside try/catch/finally, treat as success
+                if frame.returning {
+                    return Ok(());
+                }
+                // otherwise propagate errors if any
+                res?;
             }
             Stmt::Rizz { value, .. } => {
                 let v = self.eval_expr(value, env, frame).await?;
@@ -1247,5 +1311,15 @@ async fn b_hdel(args: Vec<Value>) -> anyhow::Result<Value> {
         Value::HashMap(h) => Ok(Value::Bool(h.borrow_mut().remove(&key).is_some())),
         _ => bail!("HDel expects HashMap"),
     }
+}
+
+async fn b_error(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Error(message)");
+    }
+    let mut o = BTreeMap::new();
+    o.insert("name".to_string(), Value::Str("Error".to_string()));
+    o.insert("message".to_string(), Value::Str(args[0].as_string()));
+    Ok(Value::Object(o))
 }
 
