@@ -1468,8 +1468,8 @@ async fn b_pick(args: Vec<Value>) -> anyhow::Result<Value> {
             if a.is_empty() {
                 return Ok(Value::Null);
             }
-            let mut rng = rand::rng();
-            let idx = rng.random_range(0..a.len());
+            let mut rng = rand::thread_rng();
+            let idx = rng.gen_range(0..a.len());
             Ok(a[idx].clone())
         }
         _ => bail!("Pick expects an array"),

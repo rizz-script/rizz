@@ -1,12 +1,16 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+
+use rizz_core::lexer::{lex, Kind, Token};
 
 #[derive(Debug)]
 struct Backend {
     client: Client,
     document_map: tokio::sync::RwLock<HashMap<String, String>>,
+    index_map: tokio::sync::RwLock<HashMap<String, Arc<DocumentIndex>>>,
 }
 
 impl Backend {
@@ -14,6 +18,7 @@ impl Backend {
         Self {
             client,
             document_map: tokio::sync::RwLock::new(HashMap::new()),
+            index_map: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
 
@@ -23,6 +28,13 @@ impl Backend {
         
         // Store document
         self.document_map.write().await.insert(uri.clone(), text.clone());
+        // Index symbols/types
+        if let Ok(idx) = DocumentIndex::build(&uri, &text) {
+            self.index_map
+                .write()
+                .await
+                .insert(uri.clone(), Arc::new(idx));
+        }
 
         // Run diagnostics
         self.validate_document(&params.uri, &text).await;
@@ -210,6 +222,10 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -260,11 +276,8 @@ impl LanguageServer for Backend {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let uri = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .to_string();
+        let uri_url = params.text_document_position_params.text_document.uri;
+        let uri = uri_url.to_string();
         let position = params.text_document_position_params.position;
 
         let docs = self.document_map.read().await;
@@ -274,18 +287,121 @@ impl LanguageServer for Backend {
             if let Some(line) = lines.get(position.line as usize) {
                 let word = extract_word_at_position(line, position.character as usize);
 
-                // Provide hover documentation for keywords
-                let hover_text = get_keyword_documentation(&word);
-                if let Some(doc) = hover_text {
-                    return Ok(Some(Hover {
-                        contents: HoverContents::Scalar(MarkedString::String(doc)),
-                        range: None,
-                    }));
+                // Prefer symbol/type hover for identifiers
+                if !word.is_empty() {
+                    let idxs = self.index_map.read().await;
+                    if let Some(idx) = idxs.get(&uri) {
+                        if let Some(info) = idx.hover_info(&word, position) {
+                            return Ok(Some(Hover {
+                                contents: HoverContents::Markup(MarkupContent {
+                                    kind: MarkupKind::Markdown,
+                                    value: info,
+                                }),
+                                range: None,
+                            }));
+                        }
+                    }
+
+                    // Provide hover documentation for keywords/builtins
+                    let hover_text = get_keyword_documentation(&word);
+                    if let Some(doc) = hover_text {
+                        return Ok(Some(Hover {
+                            contents: HoverContents::Markup(MarkupContent {
+                                kind: MarkupKind::Markdown,
+                                value: doc,
+                            }),
+                            range: None,
+                        }));
+                    }
                 }
             }
         }
 
         Ok(None)
+    }
+
+    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri.to_string();
+        let position = params.text_document_position_params.position;
+
+        let docs = self.document_map.read().await;
+        let Some(text) = docs.get(&uri) else { return Ok(None) };
+        let line = text.lines().nth(position.line as usize).unwrap_or("");
+        let word = extract_word_at_position(line, position.character as usize);
+        if word.is_empty() {
+            return Ok(None);
+        }
+
+        // Prefer same-document resolution (closest preceding def), then any open doc
+        let idxs = self.index_map.read().await;
+        if let Some(idx) = idxs.get(&uri) {
+            if let Some(loc) = idx.definition_location(&word, position) {
+                return Ok(Some(GotoDefinitionResponse::Scalar(loc)));
+            }
+        }
+        for (_u, idx) in idxs.iter() {
+            if let Some(loc) = idx.any_definition_location(&word) {
+                return Ok(Some(GotoDefinitionResponse::Scalar(loc)));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri.to_string();
+        let position = params.text_document_position.position;
+        let docs = self.document_map.read().await;
+        let Some(text) = docs.get(&uri) else { return Ok(None) };
+        let line = text.lines().nth(position.line as usize).unwrap_or("");
+        let word = extract_word_at_position(line, position.character as usize);
+        if word.is_empty() {
+            return Ok(None);
+        }
+
+        let idxs = self.index_map.read().await;
+        let mut out = Vec::new();
+        for (u, idx) in idxs.iter() {
+            out.extend(idx.find_references(u, &word));
+        }
+        Ok(Some(out))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri.to_string();
+        let position = params.text_document_position.position;
+        let new_name = params.new_name;
+
+        let docs = self.document_map.read().await;
+        let Some(text) = docs.get(&uri) else { return Ok(None) };
+        let line = text.lines().nth(position.line as usize).unwrap_or("");
+        let word = extract_word_at_position(line, position.character as usize);
+        if word.is_empty() {
+            return Ok(None);
+        }
+
+        let idxs = self.index_map.read().await;
+        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        for (u, idx) in idxs.iter() {
+            for loc in idx.find_references(u, &word) {
+                changes.entry(loc.uri.clone()).or_default().push(TextEdit {
+                    range: loc.range,
+                    new_text: new_name.clone(),
+                });
+            }
+        }
+        Ok(Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }))
+    }
+
+    async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri.to_string();
+        let idxs = self.index_map.read().await;
+        let Some(idx) = idxs.get(&uri) else { return Ok(None) };
+        Ok(Some(DocumentSymbolResponse::Nested(idx.document_symbols())))
     }
 }
 
@@ -346,6 +462,244 @@ fn get_keyword_documentation(word: &str) -> Option<String> {
         "Cringe" => Some("**Cringe** - Throw error/panic\n\nExample:\n```rizz\nCringe(\"Something went wrong!\")\n```".to_string()),
         _ => None,
     }
+}
+
+#[derive(Debug, Clone)]
+struct SymbolDef {
+    name: String,
+    kind: SymbolKind,
+    selection_range: Range,
+    full_range: Range,
+    detail: String, // includes type/signature
+    defined_at: Position,
+}
+
+#[derive(Debug)]
+struct DocumentIndex {
+    uri: Url,
+    defs: Vec<SymbolDef>,
+    // quick lookup for “any definition”
+    first_def: HashMap<String, usize>,
+    // occurrences for references/rename
+    occurrences: HashMap<String, Vec<Range>>,
+}
+
+impl DocumentIndex {
+    fn build(uri: &str, text: &str) -> anyhow::Result<Self> {
+        let uri_url = Url::parse(uri)?;
+        let tokens = lex(text)?;
+        let mut defs: Vec<SymbolDef> = Vec::new();
+        let mut occurrences: HashMap<String, Vec<Range>> = HashMap::new();
+
+        // record all identifier occurrences
+        for t in tokens.iter() {
+            if t.kind == Kind::Ident {
+                let r = token_range(text, t);
+                occurrences.entry(t.value.clone()).or_default().push(r);
+            }
+        }
+
+        // scan for simple top-level declarations
+        let mut i = 0usize;
+        while i < tokens.len() {
+            let k = &tokens[i].kind;
+            if matches!(k, Kind::Ayo | Kind::Let | Kind::Yoo | Kind::Const) {
+                // var/const decl
+                if let Some(name_tok) = tokens.get(i + 1) {
+                    if name_tok.kind == Kind::Ident {
+                        let (ty, _next) = parse_optional_type(&tokens, i + 2);
+                        let inferred = infer_initializer_type(&tokens, i + 2);
+                        let ty_s = ty.or(inferred).unwrap_or_else(|| "any".to_string());
+                        let kw = if matches!(k, Kind::Yoo | Kind::Const) { "const" } else { "let" };
+                        defs.push(SymbolDef {
+                            name: name_tok.value.clone(),
+                            kind: if matches!(k, Kind::Yoo | Kind::Const) { SymbolKind::CONSTANT } else { SymbolKind::VARIABLE },
+                            selection_range: token_range(text, name_tok),
+                            full_range: token_range(text, name_tok),
+                            detail: format!("`{kw} {}: {ty_s}`", name_tok.value),
+                            defined_at: range_start(token_range(text, name_tok)),
+                        });
+                    }
+                }
+            } else if matches!(k, Kind::Bruh | Kind::Function) {
+                if let Some(name_tok) = tokens.get(i + 1) {
+                    if name_tok.kind == Kind::Ident {
+                        let (sig, _end) = parse_function_signature(&tokens, i + 1);
+                        defs.push(SymbolDef {
+                            name: name_tok.value.clone(),
+                            kind: SymbolKind::FUNCTION,
+                            selection_range: token_range(text, name_tok),
+                            full_range: token_range(text, name_tok),
+                            detail: sig,
+                            defined_at: range_start(token_range(text, name_tok)),
+                        });
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        let mut first_def = HashMap::new();
+        for (idx, d) in defs.iter().enumerate() {
+            first_def.entry(d.name.clone()).or_insert(idx);
+        }
+
+        Ok(Self { uri: uri_url, defs, first_def, occurrences })
+    }
+
+    fn definition_location(&self, name: &str, pos: Position) -> Option<Location> {
+        // choose closest preceding definition
+        let mut best: Option<&SymbolDef> = None;
+        for d in self.defs.iter().filter(|d| d.name == name) {
+            if (d.defined_at.line < pos.line) || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character) {
+                best = Some(d);
+            }
+        }
+        best.map(|d| Location { uri: self.uri.clone(), range: d.selection_range })
+    }
+
+    fn any_definition_location(&self, name: &str) -> Option<Location> {
+        let idx = *self.first_def.get(name)?;
+        let d = &self.defs[idx];
+        Some(Location { uri: self.uri.clone(), range: d.selection_range })
+    }
+
+    fn hover_info(&self, name: &str, pos: Position) -> Option<String> {
+        // If multiple defs exist, choose closest preceding
+        let mut best: Option<&SymbolDef> = None;
+        for d in self.defs.iter().filter(|d| d.name == name) {
+            if (d.defined_at.line < pos.line) || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character) {
+                best = Some(d);
+            }
+        }
+        best.map(|d| d.detail.clone())
+    }
+
+    fn find_references(&self, uri: &str, name: &str) -> Vec<Location> {
+        let Ok(url) = Url::parse(uri) else { return vec![] };
+        self.occurrences
+            .get(name)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .map(|range| Location { uri: url.clone(), range })
+            .collect()
+    }
+
+    fn document_symbols(&self) -> Vec<DocumentSymbol> {
+        #[allow(deprecated)]
+        self.defs
+            .iter()
+            .map(|d| DocumentSymbol {
+                name: d.name.clone(),
+                detail: Some(d.detail.clone()),
+                kind: d.kind,
+                tags: None,
+                deprecated: None,
+                range: d.full_range,
+                selection_range: d.selection_range,
+                children: None,
+            })
+            .collect()
+    }
+}
+
+fn token_range(text: &str, t: &Token) -> Range {
+    let start = Position {
+        line: (t.line.saturating_sub(1)) as u32,
+        character: (t.col.saturating_sub(1)) as u32,
+    };
+    // LSP positions are UTF-16 code units
+    let len = t.value.encode_utf16().count() as u32;
+    let end = Position {
+        line: start.line,
+        character: start.character + len,
+    };
+    // cap to line length (defensive)
+    let _ = text; // currently unused but kept for future UTF-16 adjustments
+    Range { start, end }
+}
+
+fn range_start(r: Range) -> Position {
+    r.start
+}
+
+fn parse_optional_type(tokens: &[Token], mut i: usize) -> (Option<String>, usize) {
+    // expects colon IDENT
+    if tokens.get(i).map(|t| t.kind.clone()) == Some(Kind::Colon) {
+        i += 1;
+        if let Some(t) = tokens.get(i) {
+            if t.kind == Kind::Ident {
+                return (Some(t.value.clone()), i + 1);
+            }
+        }
+    }
+    (None, i)
+}
+
+fn infer_initializer_type(tokens: &[Token], mut i: usize) -> Option<String> {
+    // scan forward to '=' then look at next literal-ish token
+    while i < tokens.len() && tokens[i].kind != Kind::Eq && tokens[i].kind != Kind::Newline {
+        i += 1;
+    }
+    if tokens.get(i).map(|t| t.kind.clone()) != Some(Kind::Eq) {
+        return None;
+    }
+    i += 1;
+    let t = tokens.get(i)?;
+    match t.kind {
+        Kind::Int => Some("int".to_string()),
+        Kind::Float => Some("float".to_string()),
+        Kind::Str | Kind::Char => Some("string".to_string()),
+        Kind::Regex => Some("regex".to_string()),
+        Kind::LBracket => Some("array".to_string()),
+        Kind::LBrace => Some("object".to_string()),
+        Kind::Ident if t.value == "true" || t.value == "false" => Some("bool".to_string()),
+        Kind::Ident if t.value == "null" => Some("null".to_string()),
+        _ => None,
+    }
+}
+
+fn parse_function_signature(tokens: &[Token], name_idx: usize) -> (String, usize) {
+    let name = tokens.get(name_idx).map(|t| t.value.clone()).unwrap_or_default();
+    // find '(' after name
+    let mut i = name_idx + 1;
+    while i < tokens.len() && tokens[i].kind != Kind::LParen {
+        i += 1;
+    }
+    let mut params: Vec<String> = Vec::new();
+    if i < tokens.len() && tokens[i].kind == Kind::LParen {
+        i += 1;
+        while i < tokens.len() && tokens[i].kind != Kind::RParen {
+            if tokens[i].kind == Kind::Ident {
+                let pname = tokens[i].value.clone();
+                let (pty, next) = parse_optional_type(tokens, i + 1);
+                if let Some(t) = pty {
+                    params.push(format!("{pname}: {t}"));
+                } else {
+                    params.push(pname);
+                }
+                i = next;
+                // skip comma
+                if tokens.get(i).map(|t| t.kind.clone()) == Some(Kind::Comma) {
+                    i += 1;
+                }
+                continue;
+            }
+            i += 1;
+        }
+        if i < tokens.len() && tokens[i].kind == Kind::RParen {
+            i += 1;
+        }
+    }
+    // optional HawkTuah
+    if tokens.get(i).map(|t| t.kind.clone()) == Some(Kind::HawkTuah) {
+        i += 1;
+    }
+    let (ret, i2) = parse_optional_type(tokens, i);
+    let ret_s = ret.unwrap_or_else(|| "any".to_string());
+    let sig = format!("`function {name}({}): {ret_s}`", params.join(", "));
+    (sig, i2)
 }
 
 #[tokio::main]

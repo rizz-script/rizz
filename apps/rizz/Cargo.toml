@@ -1,7 +1,8 @@
 [package]
 name = "rizz"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+rust-version = "1.82"
 license = "MIT"
 description = "RizzScript v0.1 CLI"
 
@@ -14,7 +15,7 @@ rizz-core = { path = "../../packages/core" }
 anyhow = "1.0.86"
 clap = { version = "4.5.27", features = ["derive"] }
 tokio = { version = "1.43.0", features = ["macros", "rt", "rt-multi-thread", "fs", "process", "io-util"] }
-globset = "0.4.18"
-notify = "8.2.0"
+globset = "=0.4.14"
+notify = "6.1.1"
 walkdir = "2.5.0"
 
