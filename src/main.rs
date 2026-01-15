@@ -25,6 +25,14 @@ enum Command {
     },
     /// Create a starter `main.rizz` in current directory
     Init,
+    /// Format (and basic-lint) .rizz files
+    Format {
+        /// File or directory
+        path: PathBuf,
+        /// Check only (non-zero exit if changes needed)
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -61,6 +69,9 @@ Vibe main()
 "#;
                     tokio::fs::write(&path, starter).await?;
                     println!("Created {}", path.display());
+                }
+                Command::Format { path, check } => {
+                    format_paths(&path, check)?;
                 }
             }
             Ok::<(), anyhow::Error>(())
@@ -141,5 +152,43 @@ fn build_globset(patterns: &[String]) -> anyhow::Result<GlobSet> {
         b.add(Glob::new(p)?);
     }
     Ok(b.build()?)
+}
+
+fn format_paths(path: &PathBuf, check: bool) -> anyhow::Result<()> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    if path.is_dir() {
+        for e in walkdir::WalkDir::new(path) {
+            let e = e?;
+            if !e.file_type().is_file() {
+                continue;
+            }
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("rizz") {
+                files.push(p.to_path_buf());
+            }
+        }
+    } else {
+        files.push(path.clone());
+    }
+
+    let mut changed = false;
+    for p in files {
+        let src = std::fs::read_to_string(&p)?;
+        // lint: must parse
+        let _ = rizzscript::parser::parse_program(&src, p.to_string_lossy().as_ref())?;
+
+        let formatted = rizzscript::formatter::format_source(&src);
+        if formatted != src {
+            changed = true;
+            if !check {
+                std::fs::write(&p, formatted)?;
+            }
+        }
+    }
+
+    if check && changed {
+        return Err(anyhow::anyhow!("formatting changes needed"));
+    }
+    Ok(())
 }
 
