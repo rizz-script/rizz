@@ -120,7 +120,52 @@ impl Parser {
         self.skip_newlines();
         let t = self.cur().clone();
 
-        if self.at(Kind::Ayo) {
+        if self.at(Kind::Import) {
+            self.advance();
+            // import "path"  OR  import name from "path"
+            if self.at(Kind::Str) {
+                let p = self.advance().value;
+                return Ok(Stmt::Import {
+                    span: self.span(&t),
+                    name: None,
+                    path: p,
+                });
+            }
+            let name = self.expect(Kind::Ident)?.value;
+            self.expect(Kind::From)?;
+            let path = self.expect(Kind::Str)?.value;
+            return Ok(Stmt::Import {
+                span: self.span(&t),
+                name: Some(name),
+                path,
+            });
+        }
+
+        if self.at(Kind::Export) {
+            self.advance();
+            // export <decl> OR export <name>
+            if self.at(Kind::Ayo)
+                || self.at(Kind::Let)
+                || self.at(Kind::Yoo)
+                || self.at(Kind::Const)
+                || self.at(Kind::Bruh)
+                || self.at(Kind::Function)
+            {
+                // parse the declaration directly (without re-consuming export)
+                let decl = self.parse_stmt()?;
+                return Ok(Stmt::ExportDecl {
+                    span: self.span(&t),
+                    decl: Box::new(decl),
+                });
+            }
+            let name = self.expect(Kind::Ident)?.value;
+            return Ok(Stmt::Export {
+                span: self.span(&t),
+                names: vec![name],
+            });
+        }
+
+        if self.at(Kind::Ayo) || self.at(Kind::Let) {
             self.advance();
             let name = self.expect(Kind::Ident)?;
             self.expect(Kind::Eq)?;
@@ -132,7 +177,7 @@ impl Parser {
             });
         }
 
-        if self.at(Kind::Yoo) {
+        if self.at(Kind::Yoo) || self.at(Kind::Const) {
             self.advance();
             let name = self.expect(Kind::Ident)?;
             self.expect(Kind::Eq)?;
@@ -144,7 +189,7 @@ impl Parser {
             });
         }
 
-        if self.at(Kind::Bruh) {
+        if self.at(Kind::Bruh) || self.at(Kind::Function) {
             self.advance();
             let name = self.expect(Kind::Ident)?;
             self.expect(Kind::LParen)?;
@@ -167,6 +212,64 @@ impl Parser {
                 params,
                 is_async,
                 body,
+            });
+        }
+
+        if self.at(Kind::Return) {
+            self.advance();
+            // return <expr>? (expr optional)
+            if self.at(Kind::Newline) || self.at(Kind::RBrace) || self.at(Kind::Eof) {
+                return Ok(Stmt::Return {
+                    span: self.span(&t),
+                    value: None,
+                });
+            }
+            let value = self.parse_expr(0, &[])?;
+            return Ok(Stmt::Return {
+                span: self.span(&t),
+                value: Some(value),
+            });
+        }
+
+        if self.at(Kind::Throw) {
+            self.advance();
+            let value = self.parse_expr(0, &[])?;
+            return Ok(Stmt::Throw {
+                span: self.span(&t),
+                value,
+            });
+        }
+
+        if self.at(Kind::Try) {
+            self.advance();
+            let try_block = self.parse_block()?;
+
+            self.skip_newlines();
+            let mut catch_name: Option<String> = None;
+            let mut catch_block: Option<Block> = None;
+            if self.match_kind(Kind::Catch).is_some() {
+                self.skip_newlines();
+                self.expect(Kind::LParen)?;
+                let name = self.expect(Kind::Ident)?;
+                self.expect(Kind::RParen)?;
+                let blk = self.parse_block()?;
+                catch_name = Some(name.value);
+                catch_block = Some(blk);
+            }
+
+            self.skip_newlines();
+            let mut finally_block: Option<Block> = None;
+            if self.match_kind(Kind::Finally).is_some() {
+                let blk = self.parse_block()?;
+                finally_block = Some(blk);
+            }
+
+            return Ok(Stmt::Try {
+                span: self.span(&t),
+                try_block,
+                catch_name,
+                catch_block,
+                finally_block,
             });
         }
 

@@ -1,0 +1,7 @@
+const MESSAGE = "What's Up!"
+
+function main() {
+  Rizz(MESSAGE)
+}
+
+Vibe main()

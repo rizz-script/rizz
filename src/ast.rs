@@ -31,6 +31,28 @@ pub enum Stmt {
         is_async: bool,
         body: Block,
     },
+    Return { span: Span, value: Option<Expr> },
+    Throw { span: Span, value: Expr },
+    Try {
+        span: Span,
+        try_block: Block,
+        catch_name: Option<String>,
+        catch_block: Option<Block>,
+        finally_block: Option<Block>,
+    },
+    Import {
+        span: Span,
+        name: Option<String>,
+        path: String,
+    },
+    Export {
+        span: Span,
+        names: Vec<String>,
+    },
+    ExportDecl {
+        span: Span,
+        decl: Box<Stmt>,
+    },
     Rizz { span: Span, value: Expr },
     Cringe { span: Span, value: Expr },
     IfChain {

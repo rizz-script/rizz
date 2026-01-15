@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail};
@@ -10,7 +11,9 @@ use regex::Regex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
+use tokio::process::Command;
 
+use crate::parser::parse_program;
 use crate::ast::{Block, Expr, Lit, ObjKey, Program, Stmt};
 
 #[derive(Clone)]
@@ -189,6 +192,15 @@ enum BuiltinKind {
     HGet,
     HSet,
     HDel,
+    Error,
+    ShellRun,
+    FsReadFile,
+    FsWriteFile,
+    FsAppendFile,
+    FsExists,
+    FsRm,
+    ProcCwd,
+    ProcEnv,
 }
 
 struct Builtin {
@@ -227,6 +239,15 @@ impl Callable for Builtin {
             BuiltinKind::HGet => b_hget(args).await,
             BuiltinKind::HSet => b_hset(args).await,
             BuiltinKind::HDel => b_hdel(args).await,
+            BuiltinKind::Error => b_error(args).await,
+            BuiltinKind::ShellRun => b_shell_run(args).await,
+            BuiltinKind::FsReadFile => b_fs_read(args).await,
+            BuiltinKind::FsWriteFile => b_fs_write(args).await,
+            BuiltinKind::FsAppendFile => b_fs_append(args).await,
+            BuiltinKind::FsExists => b_fs_exists(args).await,
+            BuiltinKind::FsRm => b_fs_rm(args).await,
+            BuiltinKind::ProcCwd => b_proc_cwd(args).await,
+            BuiltinKind::ProcEnv => b_proc_env(args).await,
         }
     }
 }
@@ -264,6 +285,7 @@ impl Callable for UserFunction {
 #[derive(Default)]
 struct Frame {
     return_value: Option<Value>,
+    returning: bool,
 }
 
 pub struct Runtime {
@@ -271,15 +293,28 @@ pub struct Runtime {
     globals: Env,
     client: reqwest::Client,
     tasks: Vec<Rc<RefCell<Option<JoinHandle<anyhow::Result<Value>>>>>>,
+    module_cache: Rc<RefCell<HashMap<String, Value>>>,
+    current_exports: Option<Rc<RefCell<BTreeMap<String, Value>>>>,
 }
 
 impl Runtime {
     pub fn new(filename: &str, args: Vec<String>) -> Self {
+        let cache: Rc<RefCell<HashMap<String, Value>>> = Rc::new(RefCell::new(HashMap::new()));
+        Self::new_with_cache(filename, args, cache)
+    }
+
+    fn new_with_cache(
+        filename: &str,
+        args: Vec<String>,
+        module_cache: Rc<RefCell<HashMap<String, Value>>>,
+    ) -> Self {
         let mut rt = Self {
             filename: filename.to_string(),
             globals: Env::default(),
             client: reqwest::Client::new(),
             tasks: Vec::new(),
+            module_cache,
+            current_exports: None,
         };
         rt.install_builtins();
         rt.install_args(args);
@@ -337,6 +372,75 @@ impl Runtime {
         self.globals.define("HGet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HGet })), true);
         self.globals.define("HSet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HSet })), true);
         self.globals.define("HDel", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HDel })), true);
+        self.globals.define("Error", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Error })), true);
+
+        // JS-ish namespaces
+        self.globals.define("Shell", self._shell_object(), true);
+        self.globals.define("FS", self._fs_object(), true);
+        self.globals.define("Process", self._process_object(), true);
+    }
+
+    fn _shell_object(&self) -> Value {
+        let mut o = BTreeMap::new();
+        o.insert(
+            "run".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::ShellRun,
+            })),
+        );
+        Value::Object(o)
+    }
+
+    fn _fs_object(&self) -> Value {
+        let mut o = BTreeMap::new();
+        o.insert(
+            "readFile".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsReadFile,
+            })),
+        );
+        o.insert(
+            "writeFile".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsWriteFile,
+            })),
+        );
+        o.insert(
+            "appendFile".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsAppendFile,
+            })),
+        );
+        o.insert(
+            "exists".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsExists,
+            })),
+        );
+        o.insert(
+            "rm".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::FsRm,
+            })),
+        );
+        Value::Object(o)
+    }
+
+    fn _process_object(&self) -> Value {
+        let mut o = BTreeMap::new();
+        o.insert(
+            "cwd".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::ProcCwd,
+            })),
+        );
+        o.insert(
+            "env".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::ProcEnv,
+            })),
+        );
+        Value::Object(o)
     }
 
     pub async fn exec_program(&mut self, program: &Program) -> anyhow::Result<()> {
@@ -344,6 +448,9 @@ impl Runtime {
         let mut globals = std::mem::take(&mut self.globals);
         for s in &program.statements {
             self.exec_stmt(s, &mut globals, &mut frame).await?;
+            if frame.returning {
+                break;
+            }
         }
         // Await any "fire-and-forget" tasks spawned by `Vibe` that weren't `Chill`'d.
         for t in self.tasks.iter() {
@@ -355,10 +462,50 @@ impl Runtime {
         Ok(())
     }
 
+    async fn load_module(&mut self, spec: &str) -> anyhow::Result<Value> {
+        let base = self.base_dir();
+        let mut path = PathBuf::from(spec);
+        if path.is_relative() {
+            path = base.join(path);
+        }
+        if path.extension().is_none() {
+            path.set_extension("rizz");
+        }
+        let key = path.to_string_lossy().to_string();
+        if let Some(v) = self.module_cache.borrow().get(&key) {
+            return Ok(v.clone());
+        }
+
+        let src = tokio::fs::read_to_string(&path).await?;
+        let program = parse_program(&src, &key)?;
+        let exports: Rc<RefCell<BTreeMap<String, Value>>> = Rc::new(RefCell::new(BTreeMap::new()));
+
+        let mut rt = Runtime::new_with_cache(&key, vec![], self.module_cache.clone());
+        rt.current_exports = Some(exports.clone());
+        rt.exec_program(&program).await?;
+
+        let out = Value::Object(exports.borrow().clone());
+        self.module_cache.borrow_mut().insert(key, out.clone());
+        Ok(out)
+    }
+
+    fn base_dir(&self) -> PathBuf {
+        if self.filename.starts_with('<') {
+            return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        }
+        Path::new(&self.filename)
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
+    }
+
     #[async_recursion::async_recursion(?Send)]
     async fn exec_block(&mut self, block: &Block, env: &mut Env, frame: &mut Frame) -> anyhow::Result<()> {
         for s in &block.statements {
             self.exec_stmt(s, env, frame).await?;
+            if frame.returning {
+                break;
+            }
         }
         Ok(())
     }
@@ -366,6 +513,31 @@ impl Runtime {
     #[async_recursion::async_recursion(?Send)]
     async fn exec_stmt(&mut self, s: &Stmt, env: &mut Env, frame: &mut Frame) -> anyhow::Result<()> {
         match s {
+            Stmt::Import { name, path, .. } => {
+                let m = self.load_module(path).await?;
+                if let Some(n) = name {
+                    env.define(n, m, true);
+                }
+            }
+            Stmt::Export { names, .. } => {
+                if let Some(exports) = &self.current_exports {
+                    for n in names {
+                        let v = env.get(n)?;
+                        exports.borrow_mut().insert(n.clone(), v);
+                    }
+                }
+            }
+            Stmt::ExportDecl { decl, .. } => {
+                // execute the declaration
+                self.exec_stmt(decl, env, frame).await?;
+                // then export the declared binding (best-effort)
+                if let Some(exports) = &self.current_exports {
+                    if let Some(name) = exported_name(decl.as_ref()) {
+                        let v = env.get(&name)?;
+                        exports.borrow_mut().insert(name, v);
+                    }
+                }
+            }
             Stmt::VarDecl { name, value, .. } => {
                 let v = self.eval_expr(value, env, frame).await?;
                 env.define(name, v, false);
@@ -386,6 +558,60 @@ impl Runtime {
                     closure: env.clone(),
                 };
                 env.define(name, Value::Function(Rc::new(f)), true);
+            }
+            Stmt::Return { value, .. } => {
+                let v = match value {
+                    Some(e) => self.eval_expr(e, env, frame).await?,
+                    None => Value::Null,
+                };
+                frame.return_value = Some(v);
+                frame.returning = true;
+            }
+            Stmt::Throw { value, .. } => {
+                let v = self.eval_expr(value, env, frame).await?;
+                bail!("{}", v.as_string());
+            }
+            Stmt::Try {
+                try_block,
+                catch_name,
+                catch_block,
+                finally_block,
+                ..
+            } => {
+                // try
+                env.push_scope();
+                let try_res = self.exec_block(try_block, env, frame).await;
+                env.pop_scope();
+
+                let mut res = try_res;
+                if res.is_err() && catch_block.is_some() {
+                    let err = res.err().unwrap();
+                    env.push_scope();
+                    if let Some(name) = catch_name {
+                        env.define(name, Value::Str(err.to_string()), false);
+                    }
+                    let cb = catch_block.as_ref().unwrap();
+                    res = self.exec_block(cb, env, frame).await;
+                    env.pop_scope();
+                }
+
+                // finally always runs (even if returning)
+                if let Some(fb) = finally_block {
+                    env.push_scope();
+                    let fin_res = self.exec_block(fb, env, frame).await;
+                    env.pop_scope();
+                    // if finally throws, it overrides prior success/error
+                    if fin_res.is_err() {
+                        res = fin_res;
+                    }
+                }
+
+                // If we were returning from inside try/catch/finally, treat as success
+                if frame.returning {
+                    return Ok(());
+                }
+                // otherwise propagate errors if any
+                res?;
             }
             Stmt::Rizz { value, .. } => {
                 let v = self.eval_expr(value, env, frame).await?;
@@ -1247,5 +1473,110 @@ async fn b_hdel(args: Vec<Value>) -> anyhow::Result<Value> {
         Value::HashMap(h) => Ok(Value::Bool(h.borrow_mut().remove(&key).is_some())),
         _ => bail!("HDel expects HashMap"),
     }
+}
+
+async fn b_error(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Error(message)");
+    }
+    let mut o = BTreeMap::new();
+    o.insert("name".to_string(), Value::Str("Error".to_string()));
+    o.insert("message".to_string(), Value::Str(args[0].as_string()));
+    Ok(Value::Object(o))
+}
+
+async fn b_shell_run(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Shell.run(command)");
+    }
+    let cmd = args[0].as_string();
+    let output = Command::new("sh").arg("-lc").arg(cmd).output().await?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1) as i64;
+
+    if !output.status.success() {
+        let msg = stderr.trim().to_string();
+        if msg.is_empty() {
+            bail!("command failed with exit code {}", code);
+        }
+        bail!("{}", msg);
+    }
+
+    let mut o = BTreeMap::new();
+    o.insert("code".to_string(), Value::Int(code));
+    o.insert("stdout".to_string(), Value::Str(stdout));
+    o.insert("stderr".to_string(), Value::Str(stderr));
+    Ok(Value::Object(o))
+}
+
+async fn b_fs_read(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("FS.readFile(path)");
+    }
+    Ok(Value::Str(tokio::fs::read_to_string(args[0].as_string()).await?))
+}
+
+async fn b_fs_write(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("FS.writeFile(path, text)");
+    }
+    tokio::fs::write(args[0].as_string(), args[1].as_string()).await?;
+    Ok(Value::Null)
+}
+
+async fn b_fs_append(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("FS.appendFile(path, text)");
+    }
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(args[0].as_string())
+        .await?;
+    file.write_all(args[1].as_string().as_bytes()).await?;
+    Ok(Value::Null)
+}
+
+async fn b_fs_exists(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("FS.exists(path)");
+    }
+    Ok(Value::Bool(tokio::fs::try_exists(args[0].as_string()).await?))
+}
+
+async fn b_fs_rm(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("FS.rm(path)");
+    }
+    tokio::fs::remove_file(args[0].as_string()).await?;
+    Ok(Value::Null)
+}
+
+fn exported_name(s: &Stmt) -> Option<String> {
+    match s {
+        Stmt::VarDecl { name, .. } => Some(name.clone()),
+        Stmt::ConstDecl { name, .. } => Some(name.clone()),
+        Stmt::FuncDef { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+async fn b_proc_cwd(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        bail!("Process.cwd()");
+    }
+    Ok(Value::Str(std::env::current_dir()?.to_string_lossy().to_string()))
+}
+
+async fn b_proc_env(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Process.env(name)");
+    }
+    let name = args[0].as_string();
+    Ok(match std::env::var(name) {
+        Ok(v) => Value::Str(v),
+        Err(_) => Value::Null,
+    })
 }
 

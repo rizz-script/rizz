@@ -1,0 +1,27 @@
+function main() {
+  FS.writeFile("tmp.txt", "hello")
+  const ok = FS.exists("tmp.txt")
+  Rizz("exists=" + ok)
+
+  const content = FS.readFile("tmp.txt")
+  Rizz("content=" + content)
+
+  try {
+    const out = Shell.run("echo hi")
+    Rizz("stdout=" + Trim(out.stdout))
+  } catch (e) {
+    Rizz("shell error: " + e)
+  }
+
+  try {
+    Shell.run("exit 2")
+    Rizz("should not happen")
+  } catch (e2) {
+    Rizz("caught shell failure: " + e2)
+  }
+
+  FS.rm("tmp.txt")
+}
+
+Vibe main()
+

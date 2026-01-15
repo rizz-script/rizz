@@ -16,10 +16,13 @@ async-recursion = "1.1.1"
 clap = { version = "4.5.27", features = ["derive"] }
 regex = "1.11.1"
 serde_json = "1.0.135"
-tokio = { version = "1.43.0", features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "fs", "time"] }
+tokio = { version = "1.43.0", features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "fs", "time", "process"] }
 # Pinned to 0.11.x and rustls-only to avoid OpenSSL / MSRV issues.
 reqwest = { version = "0.11.24", default-features = false, features = ["json", "rustls-tls"] }
 # Pin url to pre-icu/idna1 stack for rustc 1.82 compatibility.
 url = "=2.4.1"
 rand = "0.8.5"
+globset = "=0.4.14"
+notify = "6.1.1"
+walkdir = "2.5.0"
 

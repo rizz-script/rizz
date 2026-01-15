@@ -1,6 +1,6 @@
 /*
-  RizzScript Hello World
-  A simple async HTTP example
+RizzScript Hello World
+A simple async HTTP example
 */
 
 Yoo MESSAGE = "What's good, RizzScript!"
@@ -18,17 +18,17 @@ Bruh fetchQuote() HawkTuah {
 
 Bruh main() HawkTuah {
   Rizz(MESSAGE)
-  
+
   Ayo quote = Chill(Vibe fetchQuote())
   Rizz("Quote of the day: " + quote)
-  
+
   Ayo numbers = [1, 2, 3, 4, 5]
   Ayo doubled = []
-  
+
   Crazy num in numbers {
     doubled = doubled + [num * 2]
   }
-  
+
   Rizz("Doubled numbers: " + Encode(doubled))
 }
 

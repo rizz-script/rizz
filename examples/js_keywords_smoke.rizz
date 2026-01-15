@@ -1,0 +1,15 @@
+function main() {
+  const x = 1
+  let y = 2
+  y = y + x
+  return y
+}
+
+try {
+  throw Error("nope")
+} catch (e) {
+  Rizz("caught: " + e)
+}
+
+Rizz(main())
+
