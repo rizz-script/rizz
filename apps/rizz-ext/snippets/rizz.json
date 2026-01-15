@@ -1,0 +1,126 @@
+{
+  "Variable Declaration": {
+    "prefix": "ayo",
+    "body": ["Ayo ${1:name} = ${2:value}"],
+    "description": "Declare a mutable variable"
+  },
+  "Constant Declaration": {
+    "prefix": "yoo",
+    "body": ["Yoo ${1:NAME} = ${2:value}"],
+    "description": "Declare an immutable constant"
+  },
+  "Function": {
+    "prefix": "bruh",
+    "body": ["Bruh ${1:name}(${2:params}) {", "\t${3:// body}", "\tRizz(${4:result})", "}"],
+    "description": "Define a function"
+  },
+  "Async Function": {
+    "prefix": "bruhAsync",
+    "body": [
+      "Bruh ${1:name}(${2:params}) HawkTuah {",
+      "\t${3:// async body}",
+      "\tRizz(${4:result})",
+      "}"
+    ],
+    "description": "Define an async function"
+  },
+  "If Statement": {
+    "prefix": "maybe",
+    "body": ["Maybe ${1:condition} {", "\t${2:// body}", "}"],
+    "description": "If conditional"
+  },
+  "If-Else Statement": {
+    "prefix": "maybeUnless",
+    "body": ["Maybe ${1:condition} {", "\t${2:// if body}", "} Unless {", "\t${3:// else body}", "}"],
+    "description": "If-else conditional"
+  },
+  "For Loop - Range": {
+    "prefix": "crazy",
+    "body": ["Crazy ${1:i} in ${2:0}..${3:10} {", "\t${4:// body}", "}"],
+    "description": "For loop with range"
+  },
+  "For Loop - Array": {
+    "prefix": "crazyIn",
+    "body": ["Crazy ${1:item} in ${2:array} {", "\t${3:// body}", "}"],
+    "description": "For loop iterating array"
+  },
+  "Try-Catch": {
+    "prefix": "attempt",
+    "body": ["Attempt {", "\t${1:// try body}", "} Eww (${2:error}) {", "\t${3:// catch body}", "}"],
+    "description": "Try-catch error handling"
+  },
+  "HTTP GET": {
+    "prefix": "spit",
+    "body": ["Ayo ${1:response} = Spit(\"${2:url}\")"],
+    "description": "HTTP GET request"
+  },
+  "HTTP POST": {
+    "prefix": "yeet",
+    "body": ["Ayo ${1:response} = Yeet(\"${2:url}\", ${3:data})"],
+    "description": "HTTP POST request"
+  },
+  "HTTP PUT": {
+    "prefix": "flex",
+    "body": ["Ayo ${1:response} = Flex(\"${2:url}\", ${3:data})"],
+    "description": "HTTP PUT request"
+  },
+  "HTTP DELETE": {
+    "prefix": "ghost",
+    "body": ["Ghost(\"${1:url}\")"],
+    "description": "HTTP DELETE request"
+  },
+  "Read File": {
+    "prefix": "snag",
+    "body": ["Ayo ${1:content} = Snag(\"${2:filename}\")"],
+    "description": "Read file contents"
+  },
+  "Write File": {
+    "prefix": "stash",
+    "body": ["Stash(\"${1:filename}\", ${2:content})"],
+    "description": "Write to file"
+  },
+  "TCP Server": {
+    "prefix": "listen",
+    "body": [
+      "Bruh ${1:handleRequest}(${2:socket}) HawkTuah {",
+      "\tAyo message = Peek($2)",
+      "\t${3:// handle request}",
+      "\tWhisper($2, ${4:response})",
+      "\tDip($2)",
+      "}",
+      "",
+      "Ayo server = Listen(${5:8080}, $1)"
+    ],
+    "description": "Create TCP server"
+  },
+  "Parse JSON": {
+    "prefix": "decode",
+    "body": ["Ayo ${1:obj} = Decode(${2:jsonString})"],
+    "description": "Parse JSON string"
+  },
+  "Stringify JSON": {
+    "prefix": "encode",
+    "body": ["Ayo ${1:json} = Encode(${2:obj})"],
+    "description": "Convert object to JSON"
+  },
+  "Spawn Async Task": {
+    "prefix": "vibe",
+    "body": ["Ayo ${1:task} = Vibe ${2:asyncFunction}(${3:args})"],
+    "description": "Spawn async task"
+  },
+  "Await Task": {
+    "prefix": "chill",
+    "body": ["Ayo ${1:result} = Chill(${2:task})"],
+    "description": "Await task completion"
+  },
+  "Regex Match": {
+    "prefix": "hunt",
+    "body": ["Ayo ${1:matches} = Hunt(${2:text}, r\"${3:pattern}\")"],
+    "description": "Find regex matches"
+  },
+  "Print/Return": {
+    "prefix": "rizz",
+    "body": ["Rizz(${1:value})"],
+    "description": "Return value or print"
+  }
+}

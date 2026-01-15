@@ -1,0 +1,103 @@
+{
+  "name": "rizzscript",
+  "displayName": "RizzScript",
+  "description": "Language support for RizzScript - A utility-focused scripting language with vibe-based syntax",
+  "version": "0.1.0",
+  "publisher": "rizzscript",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rizz-script/rizzz"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Linters"
+  ],
+  "keywords": [
+    "rizzscript",
+    "rizz",
+    "scripting",
+    "async",
+    "networking"
+  ],
+  "activationEvents": [
+    "onLanguage:rizz"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "rizz",
+        "aliases": [
+          "RizzScript",
+          "rizz"
+        ],
+        "extensions": [
+          ".rizz"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/icon.png",
+          "dark": "./images/icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rizz",
+        "scopeName": "source.rizz",
+        "path": "./syntaxes/rizz.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "rizz",
+        "path": "./snippets/rizz.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "RizzScript",
+      "properties": {
+        "rizzscript.lsp.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the rizz-lsp executable. Leave empty to use bundled LSP."
+        },
+        "rizzscript.lsp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^18.x",
+    "@types/vscode": "^1.75.0",
+    "@typescript-eslint/eslint-plugin": "^6.x",
+    "@typescript-eslint/parser": "^6.x",
+    "eslint": "^8.x",
+    "typescript": "^5.x",
+    "@vscode/vsce": "3"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}
