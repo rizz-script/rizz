@@ -1,9 +1,11 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail};
+use rand::Rng;
 use regex::Regex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -21,6 +23,7 @@ pub enum Value {
     Array(Vec<Value>),
     Object(BTreeMap<String, Value>),
     Regex(String),
+    HashMap(Rc<RefCell<HashMap<String, Value>>>),
 
     Function(Rc<dyn Callable>),
     Task(Rc<RefCell<Option<JoinHandle<anyhow::Result<Value>>>>>),
@@ -39,6 +42,7 @@ impl fmt::Debug for Value {
             Value::Array(a) => write!(f, "Array(len={})", a.len()),
             Value::Object(o) => write!(f, "Object(len={})", o.len()),
             Value::Regex(p) => write!(f, "Regex({p:?})"),
+            Value::HashMap(_) => write!(f, "HashMap(..)"),
             Value::Function(_) => write!(f, "Function(..)"),
             Value::Task(_) => write!(f, "Task(..)"),
             Value::Socket(_) => write!(f, "Socket(..)"),
@@ -79,6 +83,7 @@ impl Value {
                 Err(_) => format!("{self:?}"),
             },
             Value::Regex(p) => format!("r\"{p}\""),
+            Value::HashMap(_) => "<hashmap>".to_string(),
             Value::Function(_) => "<function>".to_string(),
             Value::Task(_) => "<task>".to_string(),
             Value::Socket(_) => "<socket>".to_string(),
@@ -177,6 +182,13 @@ enum BuiltinKind {
     Peek,
     Whisper,
     Dip,
+    Len,
+    Trim,
+    Pick,
+    HashMap,
+    HGet,
+    HSet,
+    HDel,
 }
 
 struct Builtin {
@@ -208,6 +220,13 @@ impl Callable for Builtin {
             BuiltinKind::Peek => b_peek(args).await,
             BuiltinKind::Whisper => b_whisper(args).await,
             BuiltinKind::Dip => b_dip(args).await,
+            BuiltinKind::Len => b_len(args).await,
+            BuiltinKind::Trim => b_trim(args).await,
+            BuiltinKind::Pick => b_pick(args).await,
+            BuiltinKind::HashMap => b_hashmap(args).await,
+            BuiltinKind::HGet => b_hget(args).await,
+            BuiltinKind::HSet => b_hset(args).await,
+            BuiltinKind::HDel => b_hdel(args).await,
         }
     }
 }
@@ -306,6 +325,18 @@ impl Runtime {
             true,
         );
         self.globals.define("Dip", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Dip })), true);
+
+        self.globals.define("Len", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Len })), true);
+        self.globals.define("Trim", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Trim })), true);
+        self.globals.define("Pick", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Pick })), true);
+        self.globals.define(
+            "HashMap",
+            Value::Function(Rc::new(Builtin { kind: BuiltinKind::HashMap })),
+            true,
+        );
+        self.globals.define("HGet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HGet })), true);
+        self.globals.define("HSet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HSet })), true);
+        self.globals.define("HDel", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HDel })), true);
     }
 
     pub async fn exec_program(&mut self, program: &Program) -> anyhow::Result<()> {
@@ -667,6 +698,13 @@ fn to_json(v: &Value) -> anyhow::Result<serde_json::Value> {
             serde_json::Value::Object(map)
         }
         Value::Regex(p) => serde_json::Value::String(p.clone()),
+        Value::HashMap(h) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in h.borrow().iter() {
+                map.insert(k.clone(), to_json(v)?);
+            }
+            serde_json::Value::Object(map)
+        }
         _ => serde_json::Value::String(v.as_string()),
     })
 }
@@ -973,5 +1011,86 @@ async fn b_dip(args: Vec<Value>) -> anyhow::Result<Value> {
     let mut s = sock.lock().await;
     s.shutdown().await?;
     Ok(Value::Null)
+}
+
+async fn b_len(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Len(x)");
+    }
+    let n = match &args[0] {
+        Value::Str(s) => s.chars().count(),
+        Value::Array(a) => a.len(),
+        Value::Object(o) => o.len(),
+        Value::HashMap(h) => h.borrow().len(),
+        _ => 0,
+    } as i64;
+    Ok(Value::Int(n))
+}
+
+async fn b_trim(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Trim(text)");
+    }
+    Ok(Value::Str(args[0].as_string().trim().to_string()))
+}
+
+async fn b_pick(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Pick(array)");
+    }
+    match &args[0] {
+        Value::Array(a) => {
+            if a.is_empty() {
+                return Ok(Value::Null);
+            }
+            let mut rng = rand::thread_rng();
+            let idx = rng.gen_range(0..a.len());
+            Ok(a[idx].clone())
+        }
+        _ => bail!("Pick expects an array"),
+    }
+}
+
+async fn b_hashmap(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        bail!("HashMap() takes no args");
+    }
+    Ok(Value::HashMap(Rc::new(RefCell::new(HashMap::new()))))
+}
+
+async fn b_hget(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("HGet(map, key)");
+    }
+    let key = args[1].as_string();
+    match &args[0] {
+        Value::HashMap(h) => Ok(h.borrow().get(&key).cloned().unwrap_or(Value::Null)),
+        _ => bail!("HGet expects HashMap"),
+    }
+}
+
+async fn b_hset(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        bail!("HSet(map, key, value)");
+    }
+    let key = args[1].as_string();
+    match &args[0] {
+        Value::HashMap(h) => {
+            h.borrow_mut().insert(key, args[2].clone());
+            Ok(Value::Null)
+        }
+        _ => bail!("HSet expects HashMap"),
+    }
+}
+
+async fn b_hdel(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("HDel(map, key)");
+    }
+    let key = args[1].as_string();
+    match &args[0] {
+        Value::HashMap(h) => Ok(Value::Bool(h.borrow_mut().remove(&key).is_some())),
+        _ => bail!("HDel expects HashMap"),
+    }
 }
 
