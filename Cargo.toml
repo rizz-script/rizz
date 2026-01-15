@@ -1,0 +1,20 @@
+[package]
+name = "rizz"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "RizzScript v0.1 interpreter (Rust core)"
+
+[lib]
+name = "rizzscript"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.86"
+async-trait = "0.1.85"
+clap = { version = "4.5.27", features = ["derive"] }
+regex = "1.11.1"
+serde_json = "1.0.135"
+tokio = { version = "1.43.0", features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "fs", "time"] }
+reqwest = { version = "0.12.12", default-features = true, features = ["json", "rustls-tls"] }
+
