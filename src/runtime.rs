@@ -88,48 +88,62 @@ impl Value {
 }
 
 #[derive(Default, Clone)]
-pub struct Env {
-    parent: Option<Box<Env>>,
+struct Scope {
     values: BTreeMap<String, Value>,
     consts: BTreeMap<String, bool>,
 }
 
-impl Env {
-    fn child(&self) -> Env {
-        Env {
-            parent: Some(Box::new(self.clone())),
-            values: BTreeMap::new(),
-            consts: BTreeMap::new(),
+#[derive(Clone)]
+pub struct Env {
+    scopes: Vec<Scope>,
+}
+
+impl Default for Env {
+    fn default() -> Self {
+        Self {
+            scopes: vec![Scope::default()],
         }
+    }
+}
+
+impl Env {
+    fn push_scope(&mut self) {
+        self.scopes.push(Scope::default());
+    }
+
+    fn pop_scope(&mut self) {
+        if self.scopes.len() <= 1 {
+            return;
+        }
+        self.scopes.pop();
     }
 
     fn define(&mut self, name: &str, value: Value, is_const: bool) {
-        self.values.insert(name.to_string(), value);
+        let scope = self.scopes.last_mut().expect("at least one scope");
+        scope.values.insert(name.to_string(), value);
         if is_const {
-            self.consts.insert(name.to_string(), true);
+            scope.consts.insert(name.to_string(), true);
         }
     }
 
     fn get(&self, name: &str) -> anyhow::Result<Value> {
-        if let Some(v) = self.values.get(name) {
-            return Ok(v.clone());
-        }
-        if let Some(p) = &self.parent {
-            return p.get(name);
+        for scope in self.scopes.iter().rev() {
+            if let Some(v) = scope.values.get(name) {
+                return Ok(v.clone());
+            }
         }
         bail!("Undefined variable: {name}");
     }
 
     fn set(&mut self, name: &str, value: Value) -> anyhow::Result<()> {
-        if self.values.contains_key(name) {
-            if self.consts.get(name).copied().unwrap_or(false) {
-                bail!("Cannot assign to constant: {name}");
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.values.contains_key(name) {
+                if scope.consts.get(name).copied().unwrap_or(false) {
+                    bail!("Cannot assign to constant: {name}");
+                }
+                scope.values.insert(name.to_string(), value);
+                return Ok(());
             }
-            self.values.insert(name.to_string(), value);
-            return Ok(());
-        }
-        if let Some(p) = &mut self.parent {
-            return p.set(name, value);
         }
         bail!("Undefined variable: {name}");
     }
@@ -217,7 +231,8 @@ impl Callable for UserFunction {
                 args.len()
             );
         }
-        let mut env = self.closure.child();
+        let mut env = self.closure.clone();
+        env.push_scope();
         for (k, v) in self.params.iter().zip(args.into_iter()) {
             env.define(k, v, false);
         }
@@ -349,22 +364,28 @@ impl Runtime {
             }
             Stmt::IfChain { cond, then_block, elifs, else_block, .. } => {
                 if self.eval_expr(cond, env, frame).await?.truthy() {
-                    let mut child = env.child();
-                    self.exec_block(then_block, &mut child, frame).await?;
+                    env.push_scope();
+                    let res = self.exec_block(then_block, env, frame).await;
+                    env.pop_scope();
+                    res?;
                 } else {
                     let mut done = false;
                     for (c, b) in elifs {
                         if self.eval_expr(c, env, frame).await?.truthy() {
-                            let mut child = env.child();
-                            self.exec_block(b, &mut child, frame).await?;
+                            env.push_scope();
+                            let res = self.exec_block(b, env, frame).await;
+                            env.pop_scope();
+                            res?;
                             done = true;
                             break;
                         }
                     }
                     if !done {
                         if let Some(b) = else_block {
-                            let mut child = env.child();
-                            self.exec_block(b, &mut child, frame).await?;
+                            env.push_scope();
+                            let res = self.exec_block(b, env, frame).await;
+                            env.pop_scope();
+                            res?;
                         }
                     }
                 }
@@ -376,15 +397,19 @@ impl Runtime {
                     _ => bail!("Crazy ... in ... expects an array"),
                 };
                 for v in list {
-                    let mut child = env.child();
-                    child.define(var, v, false);
-                    self.exec_block(body, &mut child, frame).await?;
+                    env.push_scope();
+                    env.define(var, v, false);
+                    let res = self.exec_block(body, env, frame).await;
+                    env.pop_scope();
+                    res?;
                 }
             }
             Stmt::WhileLoop { cond, body, .. } => {
                 while self.eval_expr(cond, env, frame).await?.truthy() {
-                    let mut child = env.child();
-                    self.exec_block(body, &mut child, frame).await?;
+                    env.push_scope();
+                    let res = self.exec_block(body, env, frame).await;
+                    env.pop_scope();
+                    res?;
                 }
             }
         }
@@ -509,17 +534,18 @@ impl Runtime {
                 Ok(Value::Task(cell))
             }
             Expr::Attempt { try_block, err_name, catch_block, .. } => {
-                let mut child = env.child();
-                let mut local_frame = Frame::default();
-                let res = self.exec_block(try_block, &mut child, &mut local_frame).await;
+                env.push_scope();
+                let res = self.exec_block(try_block, env, frame).await;
+                env.pop_scope();
                 match res {
-                    Ok(()) => Ok(local_frame.return_value.unwrap_or(Value::Null)),
+                    Ok(()) => Ok(frame.return_value.clone().unwrap_or(Value::Null)),
                     Err(e) => {
-                        let mut child2 = env.child();
-                        child2.define(err_name, Value::Str(e.to_string()), false);
-                        let mut f2 = Frame::default();
-                        self.exec_block(catch_block, &mut child2, &mut f2).await?;
-                        Ok(f2.return_value.unwrap_or(Value::Null))
+                        env.push_scope();
+                        env.define(err_name, Value::Str(e.to_string()), false);
+                        let res2 = self.exec_block(catch_block, env, frame).await;
+                        env.pop_scope();
+                        res2?;
+                        Ok(frame.return_value.clone().unwrap_or(Value::Null))
                     }
                 }
             }
