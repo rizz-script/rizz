@@ -16,5 +16,6 @@ clap = { version = "4.5.27", features = ["derive"] }
 regex = "1.11.1"
 serde_json = "1.0.135"
 tokio = { version = "1.43.0", features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "fs", "time"] }
-reqwest = { version = "0.12.12", default-features = true, features = ["json", "rustls-tls"] }
+# Pinned to 0.11.x to keep compatibility with rustc 1.82 (newer url/idna/icu stack needs 1.83+).
+reqwest = { version = "0.11.24", default-features = true, features = ["json", "rustls-tls"] }
 
