@@ -295,6 +295,7 @@ impl Runtime {
         Ok(())
     }
 
+    #[async_recursion::async_recursion(?Send)]
     async fn exec_block(&mut self, block: &Block, env: &mut Env, frame: &mut Frame) -> anyhow::Result<()> {
         for s in &block.statements {
             self.exec_stmt(s, env, frame).await?;
@@ -302,6 +303,7 @@ impl Runtime {
         Ok(())
     }
 
+    #[async_recursion::async_recursion(?Send)]
     async fn exec_stmt(&mut self, s: &Stmt, env: &mut Env, frame: &mut Frame) -> anyhow::Result<()> {
         match s {
             Stmt::VarDecl { name, value, .. } => {
