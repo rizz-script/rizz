@@ -1,38 +1,107 @@
-Yoo PORT = 6379
+Yoo PORT = 6380
+Yoo CRLF = "\x0d\x0a"
 
 // In-memory store (HashMap datatype)
-Yoo STORE = HashMap()
+Ayo STORE = HashMap()
+
+// RESP protocol helper: bulk string
+Bruh bulkString(str) {
+  Maybe str == null {
+    Rizz("$-1" + CRLF)  // Null bulk string
+  }
+  Ayo s = str + ""  // Convert to string
+  Ayo len = Len(s)
+  Rizz("$" + len + CRLF + s + CRLF)
+}
+
+// RESP protocol helper: simple string
+Bruh simpleString(str) {
+  Rizz("+" + str + CRLF)
+}
+
+// RESP protocol helper: error
+Bruh errorString(str) {
+  Rizz("-" + str + CRLF)
+}
+
+// RESP protocol helper: integer
+Bruh intString(num) {
+  Rizz(":" + num + CRLF)
+}
+
+// Parse RESP array format from redis-cli
+// Format: *<count>\r\n$<len>\r\n<data>\r\n$<len>\r\n<data>\r\n...
+Bruh parseRESP(msg) {
+  Ayo result = []
+  
+  // Extract bulk strings using regex
+  // Pattern: $<number>\r\n<data> - we want to capture <data>
+  Ayo pattern = r"\$\d+\r\n([^\r\n]+)"
+  Ayo matches = Hunt(msg, pattern)
+  
+  Maybe Len(matches) > 0 {
+    // Extract the captured groups (the actual data)
+    Crazy match in matches {
+      result = result + [match]
+    }
+  } Unless {
+    // Fallback: try plain text parsing if no RESP format found
+    Ayo trimmed = Trim(msg)
+    Maybe Len(trimmed) > 0 {
+      result = Split(trimmed, r"\s+")
+    }
+  }
+  
+  Rizz(result)
+}
 
 Bruh handleClient(sock) HawkTuah {
-  Ayo msg = Trim(Peek(sock))
-  Ayo parts = Split(msg, r"\s+")
+  Attempt {
+    Ayo msg = Peek(sock)
+    Ayo parts = parseRESP(msg)
 
-  Maybe Len(parts) == 0 {
-    Whisper(sock, "ERR empty command\n")
+    Maybe Len(parts) == 0 {
+      Whisper(sock, errorString("ERR empty command"))
+      Dip(sock)
+      Rizz(null)
+    }
+
+    Ayo cmd = parts[0]
+
+    Maybe cmd == "GET" && Len(parts) >= 2 {
+      Ayo key = parts[1]
+      Ayo val = HGet(STORE, key)
+      Whisper(sock, bulkString(val))
+    } Unless Maybe cmd == "SET" && Len(parts) >= 3 {
+      Ayo key = parts[1]
+      Ayo value = parts[2]
+      HSet(STORE, key, value)
+      Whisper(sock, simpleString("OK"))
+    } Unless Maybe cmd == "DEL" && Len(parts) >= 2 {
+      Ayo key = parts[1]
+      Ayo ok = HDel(STORE, key)
+      Whisper(sock, intString(Maybe ok ? 1 : 0))
+    } Unless Maybe cmd == "PING" {
+      Whisper(sock, simpleString("PONG"))
+    } Unless Maybe cmd == "COMMAND" {
+      // redis-cli sends COMMAND DOCS on connect - just return empty array
+      Whisper(sock, "*0" + CRLF)
+    } Unless {
+      Whisper(sock, errorString("ERR unknown command '" + cmd + "'"))
+    }
+
+    // Close connection gracefully
     Dip(sock)
-    Rizz(null)
+  } Eww (error) {
+    Rizz("Error handling client: " + error)
+    Attempt {
+      Whisper(sock, errorString("ERR server error: " + error))
+      Dip(sock)
+    } Eww (e2) {
+      Rizz("Failed to send error: " + e2)
+    }
   }
-
-  Ayo cmd = parts[0]
-
-  Maybe cmd == "GET" && Len(parts) >= 2 {
-    Ayo key = parts[1]
-    Ayo val = HGet(STORE, key)
-    Whisper(sock, Encode(val) + "\n")
-  } Unless Maybe cmd == "SET" && Len(parts) >= 3 {
-    Ayo key = parts[1]
-    Ayo value = parts[2]
-    HSet(STORE, key, value)
-    Whisper(sock, "OK\n")
-  } Unless Maybe cmd == "DEL" && Len(parts) >= 2 {
-    Ayo key = parts[1]
-    Ayo ok = HDel(STORE, key)
-    Whisper(sock, Maybe ok ? "1\n" : "0\n")
-  } Unless {
-    Whisper(sock, "ERR unknown command\n")
-  }
-
-  Dip(sock)
+  
   Rizz(null)
 }
 

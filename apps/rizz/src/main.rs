@@ -50,10 +50,10 @@ async fn main() -> anyhow::Result<()> {
                     } else {
                         let src = tokio::fs::read_to_string(&file).await?;
                         let program =
-                            rizzscript::parser::parse_program(&src, file.to_string_lossy().as_ref())?;
-                        rizzscript::typecheck::typecheck(&program)?;
+                            rizz_core::parser::parse_program(&src, file.to_string_lossy().as_ref())?;
+                        rizz_core::typecheck::typecheck(&program)?;
                         let mut rt =
-                            rizzscript::runtime::Runtime::new(file.to_string_lossy().as_ref(), args);
+                            rizz_core::runtime::Runtime::new(file.to_string_lossy().as_ref(), args);
                         rt.exec_program(&program).await?;
                     }
                 }
@@ -181,9 +181,9 @@ fn format_paths(path: &PathBuf, check: bool) -> anyhow::Result<()> {
     for p in files {
         let src = std::fs::read_to_string(&p)?;
         // lint: must parse
-        let _ = rizzscript::parser::parse_program(&src, p.to_string_lossy().as_ref())?;
+        let _ = rizz_core::parser::parse_program(&src, p.to_string_lossy().as_ref())?;
 
-        let formatted = rizzscript::formatter::format_source(&src);
+        let formatted = rizz_core::formatter::format_source(&src);
         if formatted != src {
             changed = true;
             if !check {
