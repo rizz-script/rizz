@@ -1,0 +1,36 @@
+/*
+  RizzScript Hello World
+  A simple async HTTP example
+*/
+
+Yoo MESSAGE = "What's good, RizzScript!"
+
+Bruh fetchQuote() HawkTuah {
+  Attempt {
+    Ayo response = Spit("https://api.quotable.io/random")
+    Ayo data = Decode(response. body)
+    Rizz(data.content)
+  } Eww (error) {
+    Rizz("Couldn't fetch quote: " + error)
+    Rizz("Using fallback instead")
+  }
+}
+
+Bruh main() HawkTuah {
+  Rizz(MESSAGE)
+  
+  Ayo quote = Chill(Vibe fetchQuote())
+  Rizz("Quote of the day: " + quote)
+  
+  Ayo numbers = [1, 2, 3, 4, 5]
+  Ayo doubled = []
+  
+  Crazy num in numbers {
+    doubled = doubled + [num * 2]
+  }
+  
+  Rizz("Doubled numbers: " + Encode(doubled))
+}
+
+Vibe main()
+
