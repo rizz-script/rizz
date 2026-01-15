@@ -10,8 +10,8 @@ Bruh main() HawkTuah {
   Ayo lines = Split(content, r"\n")
 
   // highlight matches in red using ANSI escapes
-  Yoo RED = "\u001b[31m"
-  Yoo RESET = "\u001b[0m"
+  Yoo RED = "\x1b[31m"
+  Yoo RESET = "\x1b[0m"
 
   Crazy line in lines {
     Maybe Matches(line, pattern) {

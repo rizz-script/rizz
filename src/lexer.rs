@@ -211,6 +211,34 @@ pub fn lex(src: &str) -> anyhow::Result<Vec<Token>> {
                         't' => s.push('\t'),
                         '"' => s.push('"'),
                         '\\' => s.push('\\'),
+                        'u' => {
+                            // \uXXXX
+                            if i + 5 >= bytes.len() {
+                                bail!("Bad \\u escape at {line}:{col}");
+                            }
+                            let hex = std::str::from_utf8(&bytes[i + 2..i + 6])?;
+                            let cp = u32::from_str_radix(hex, 16)
+                                .map_err(|_| anyhow::anyhow!("Bad \\u escape at {line}:{col}"))?;
+                            let ch = char::from_u32(cp)
+                                .ok_or_else(|| anyhow::anyhow!("Bad unicode codepoint at {line}:{col}"))?;
+                            s.push(ch);
+                            i += 6;
+                            col += 6;
+                            continue;
+                        }
+                        'x' => {
+                            // \xNN
+                            if i + 3 >= bytes.len() {
+                                bail!("Bad \\x escape at {line}:{col}");
+                            }
+                            let hex = std::str::from_utf8(&bytes[i + 2..i + 4])?;
+                            let b = u8::from_str_radix(hex, 16)
+                                .map_err(|_| anyhow::anyhow!("Bad \\x escape at {line}:{col}"))?;
+                            s.push(b as char);
+                            i += 4;
+                            col += 4;
+                            continue;
+                        }
                         other => s.push(other),
                     }
                     i += 2;
