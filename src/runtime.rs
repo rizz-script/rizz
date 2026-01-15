@@ -236,6 +236,7 @@ pub struct Runtime {
     filename: String,
     globals: Env,
     client: reqwest::Client,
+    tasks: Vec<Rc<RefCell<Option<JoinHandle<anyhow::Result<Value>>>>>>,
 }
 
 impl Runtime {
@@ -244,6 +245,7 @@ impl Runtime {
             filename: filename.to_string(),
             globals: Env::default(),
             client: reqwest::Client::new(),
+            tasks: Vec::new(),
         };
         rt.install_builtins();
         rt
@@ -290,6 +292,12 @@ impl Runtime {
         let mut globals = std::mem::take(&mut self.globals);
         for s in &program.statements {
             self.exec_stmt(s, &mut globals, &mut frame).await?;
+        }
+        // Await any "fire-and-forget" tasks spawned by `Vibe` that weren't `Chill`'d.
+        for t in self.tasks.iter() {
+            if let Some(handle) = t.borrow_mut().take() {
+                let _ = handle.await??;
+            }
         }
         self.globals = globals;
         Ok(())
@@ -496,7 +504,9 @@ impl Runtime {
                     let mut frame = Frame::default();
                     rt.eval_expr(&e2, &mut snap, &mut frame).await
                 });
-                Ok(Value::Task(Rc::new(RefCell::new(Some(handle)))))
+                let cell = Rc::new(RefCell::new(Some(handle)));
+                self.tasks.push(cell.clone());
+                Ok(Value::Task(cell))
             }
             Expr::Attempt { try_block, err_name, catch_block, .. } => {
                 let mut child = env.child();
