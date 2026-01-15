@@ -255,7 +255,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn new(filename: &str) -> Self {
+    pub fn new(filename: &str, args: Vec<String>) -> Self {
         let mut rt = Self {
             filename: filename.to_string(),
             globals: Env::default(),
@@ -263,7 +263,13 @@ impl Runtime {
             tasks: Vec::new(),
         };
         rt.install_builtins();
+        rt.install_args(args);
         rt
+    }
+
+    fn install_args(&mut self, args: Vec<String>) {
+        let arr = args.into_iter().map(Value::Str).collect::<Vec<_>>();
+        self.globals.define("ARGS", Value::Array(arr), true);
     }
 
     fn install_builtins(&mut self) {
@@ -525,7 +531,7 @@ impl Runtime {
                 let mut snap = env.clone();
                 let e2 = (*expr.clone()).clone();
                 let handle = tokio::task::spawn_local(async move {
-                    let mut rt = Runtime::new("<task>");
+                    let mut rt = Runtime::new("<task>", vec![]);
                     let mut frame = Frame::default();
                     rt.eval_expr(&e2, &mut snap, &mut frame).await
                 });
@@ -905,7 +911,7 @@ async fn b_listen(args: Vec<Value>) -> anyhow::Result<Value> {
     };
     let listener = TcpListener::bind(("0.0.0.0", port)).await?;
     let handle = tokio::task::spawn_local(async move {
-        let mut rt = Runtime::new("<server>");
+        let mut rt = Runtime::new("<server>", vec![]);
         loop {
             let (stream, _) = listener.accept().await?;
             let sock = Value::Socket(Rc::new(tokio::sync::Mutex::new(stream)));

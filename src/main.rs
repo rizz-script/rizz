@@ -12,7 +12,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run a .rizz file
-    Run { file: PathBuf },
+    Run {
+        file: PathBuf,
+        /// Arguments passed to the script (available as global ARGS)
+        args: Vec<String>,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -22,11 +26,12 @@ async fn main() -> anyhow::Result<()> {
         .run_until(async {
             let cli = Cli::parse();
             match cli.cmd {
-                Command::Run { file } => {
+                Command::Run { file, args } => {
                     let src = tokio::fs::read_to_string(&file).await?;
                     let program =
                         rizzscript::parser::parse_program(&src, file.to_string_lossy().as_ref())?;
-                    let mut rt = rizzscript::runtime::Runtime::new(file.to_string_lossy().as_ref());
+                    let mut rt =
+                        rizzscript::runtime::Runtime::new(file.to_string_lossy().as_ref(), args);
                     rt.exec_program(&program).await?;
                 }
             }
