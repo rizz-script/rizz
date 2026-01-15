@@ -855,10 +855,21 @@ async fn b_hunt(args: Vec<Value>) -> anyhow::Result<Value> {
     let text = args[0].as_string();
     let pat = regex_pat(&args[1]);
     let re = Regex::new(&pat)?;
-    let out = re
-        .find_iter(&text)
-        .map(|m| Value::Str(m.as_str().to_string()))
-        .collect();
+    let mut out = Vec::new();
+    let has_groups = re.captures_len() > 1;
+    if has_groups {
+        for caps in re.captures_iter(&text) {
+            if let Some(m) = caps.get(1) {
+                out.push(Value::Str(m.as_str().to_string()));
+            } else if let Some(m) = caps.get(0) {
+                out.push(Value::Str(m.as_str().to_string()));
+            }
+        }
+    } else {
+        for m in re.find_iter(&text) {
+            out.push(Value::Str(m.as_str().to_string()));
+        }
+    }
     Ok(Value::Array(out))
 }
 

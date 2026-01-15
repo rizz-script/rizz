@@ -12,15 +12,13 @@ Bruh handleRequest(req) HawkTuah {
   Ayo method = req.method
   Ayo path = req.path
 
-  // GET /:name  -> "Awwm <name> is a pookie"
   Maybe method == "GET" && Matches(path, r"^/[^/]+$") {
+    // GET /:name  -> "Awwm <name> is a pookie"
     Ayo m = Hunt(path, r"^/([^/]+)$")
     Ayo name = Maybe Len(m) > 0 ? m[0] : "friend"
     Rizz({"status": 200, "body": "Awwm " + name + " is a pookie"})
-  }
-
-  // POST /great -> random quote
-  Maybe method == "POST" && path == "/great" {
+  } Unless Maybe method == "POST" && path == "/great" {
+    // POST /great -> random quote
     Ayo quote = Pick(QUOTES)
     Rizz({"status": 200, "body": quote})
   } Unless {
