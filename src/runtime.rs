@@ -949,16 +949,160 @@ async fn b_listen(args: Vec<Value>) -> anyhow::Result<Value> {
     };
     let listener = TcpListener::bind(("0.0.0.0", port)).await?;
     let handle = tokio::task::spawn_local(async move {
-        let mut rt = Runtime::new("<server>", vec![]);
         loop {
             let (stream, _) = listener.accept().await?;
-            let sock = Value::Socket(Rc::new(tokio::sync::Mutex::new(stream)));
-            let _ = handler.call(&mut rt, vec![sock]).await?;
+            let handler = handler.clone();
+            tokio::task::spawn_local(async move {
+                let _ = handle_incoming_connection(stream, handler).await;
+            });
         }
         #[allow(unreachable_code)]
         Ok::<(), anyhow::Error>(())
     });
     Ok(Value::Server(Rc::new(RefCell::new(Some(handle)))))
+}
+
+async fn handle_incoming_connection(mut stream: TcpStream, handler: Rc<dyn Callable>) -> anyhow::Result<()> {
+    let mut peek_buf = [0u8; 1024];
+    let n = stream.peek(&mut peek_buf).await?;
+    let s = String::from_utf8_lossy(&peek_buf[..n]);
+
+    if s.starts_with("GET ")
+        || s.starts_with("POST ")
+        || s.starts_with("PUT ")
+        || s.starts_with("DELETE ")
+        || s.starts_with("PATCH ")
+    {
+        if s.contains("HTTP/") {
+            let (req, body_bytes) = read_http_request(&mut stream).await?;
+            let mut rt = Runtime::new("<http>", vec![]);
+            let resp_val = handler.call(&mut rt, vec![req]).await?;
+            write_http_response(&mut stream, resp_val, body_bytes.is_some()).await?;
+            let _ = stream.shutdown().await;
+            return Ok(());
+        }
+    }
+
+    // raw TCP: pass socket through as-is
+    let sock = Value::Socket(Rc::new(tokio::sync::Mutex::new(stream)));
+    let mut rt = Runtime::new("<tcp>", vec![]);
+    let _ = handler.call(&mut rt, vec![sock]).await?;
+    Ok(())
+}
+
+async fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<(Value, Option<Vec<u8>>)> {
+    let mut buf = Vec::<u8>::new();
+    let mut tmp = [0u8; 2048];
+    let mut header_end = None;
+    while buf.len() < 64 * 1024 {
+        let n = stream.read(&mut tmp).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
+            header_end = Some(pos + 4);
+            break;
+        }
+    }
+    let header_end = header_end.ok_or_else(|| anyhow!("Invalid HTTP request (no header terminator)"))?;
+    let (head, mut rest) = buf.split_at(header_end);
+
+    let head_str = String::from_utf8_lossy(head);
+    let mut lines = head_str.split("\r\n").filter(|l| !l.is_empty());
+    let request_line = lines.next().ok_or_else(|| anyhow!("Missing request line"))?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().ok_or_else(|| anyhow!("Bad request line"))?.to_string();
+    let path = parts.next().ok_or_else(|| anyhow!("Bad request line"))?.to_string();
+
+    let mut headers = BTreeMap::new();
+    let mut content_length: usize = 0;
+    for line in lines {
+        if let Some((k, v)) = line.split_once(':') {
+            let key = k.trim().to_string();
+            let val = v.trim().to_string();
+            if key.eq_ignore_ascii_case("content-length") {
+                if let Ok(n) = val.parse::<usize>() {
+                    content_length = n;
+                }
+            }
+            headers.insert(key, Value::Str(val));
+        }
+    }
+
+    let mut body = Vec::<u8>::new();
+    body.extend_from_slice(rest);
+    while body.len() < content_length && body.len() < 8 * 1024 * 1024 {
+        let n = stream.read(&mut tmp).await?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&tmp[..n]);
+    }
+    body.truncate(content_length);
+    let body_str = String::from_utf8_lossy(&body).to_string();
+
+    let mut req = BTreeMap::new();
+    req.insert("method".to_string(), Value::Str(method));
+    req.insert("path".to_string(), Value::Str(path));
+    req.insert("headers".to_string(), Value::Object(headers));
+    req.insert("body".to_string(), Value::Str(body_str));
+
+    Ok((Value::Object(req), if content_length > 0 { Some(body) } else { None }))
+}
+
+async fn write_http_response(stream: &mut TcpStream, resp: Value, _had_body: bool) -> anyhow::Result<()> {
+    let mut status: i64 = 200;
+    let mut body = String::new();
+    let mut extra_headers: BTreeMap<String, String> = BTreeMap::new();
+
+    match resp {
+        Value::Object(o) => {
+            if let Some(Value::Int(s)) = o.get("status") {
+                status = *s;
+            }
+            if let Some(v) = o.get("body") {
+                body = v.as_string();
+            }
+            if let Some(Value::Object(h)) = o.get("headers") {
+                for (k, v) in h.iter() {
+                    extra_headers.insert(k.clone(), v.as_string());
+                }
+            }
+        }
+        other => {
+            body = other.as_string();
+        }
+    }
+
+    let reason = match status {
+        200 => "OK",
+        201 => "Created",
+        400 => "Bad Request",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+    let body_bytes = body.as_bytes();
+    let mut resp_head = String::new();
+    resp_head.push_str(&format!("HTTP/1.1 {status} {reason}\r\n"));
+    resp_head.push_str("Connection: close\r\n");
+    if !extra_headers.contains_key("Content-Type") {
+        resp_head.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    }
+    resp_head.push_str(&format!("Content-Length: {}\r\n", body_bytes.len()));
+    for (k, v) in extra_headers {
+        resp_head.push_str(&format!("{k}: {v}\r\n"));
+    }
+    resp_head.push_str("\r\n");
+
+    stream.write_all(resp_head.as_bytes()).await?;
+    stream.write_all(body_bytes).await?;
+    Ok(())
+}
+
+fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 async fn b_holla(args: Vec<Value>) -> anyhow::Result<Value> {
