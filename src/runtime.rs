@@ -1,16 +1,17 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::fmt;
+use std::rc::Rc;
 
 use anyhow::{anyhow, bail};
 use regex::Regex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::ast::{Block, Expr, Lit, ObjKey, Program, Stmt};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Value {
     Null,
     Bool(bool),
@@ -21,11 +22,29 @@ pub enum Value {
     Object(BTreeMap<String, Value>),
     Regex(String),
 
-    Task(Arc<Mutex<Option<JoinHandle<anyhow::Result<Value>>>>>),
-    Socket(Arc<Mutex<TcpStream>>),
-    Server(Arc<Mutex<JoinHandle<anyhow::Result<()>>>>),
+    Function(Rc<dyn Callable>),
+    Task(Rc<RefCell<Option<JoinHandle<anyhow::Result<Value>>>>>),
+    Socket(Rc<tokio::sync::Mutex<TcpStream>>),
+    Server(Rc<RefCell<Option<JoinHandle<anyhow::Result<()>>>>>),
+}
 
-    Function(Arc<dyn Callable>),
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Null => write!(f, "Null"),
+            Value::Bool(b) => write!(f, "Bool({b})"),
+            Value::Int(i) => write!(f, "Int({i})"),
+            Value::Float(x) => write!(f, "Float({x})"),
+            Value::Str(s) => write!(f, "Str({s:?})"),
+            Value::Array(a) => write!(f, "Array(len={})", a.len()),
+            Value::Object(o) => write!(f, "Object(len={})", o.len()),
+            Value::Regex(p) => write!(f, "Regex({p:?})"),
+            Value::Function(_) => write!(f, "Function(..)"),
+            Value::Task(_) => write!(f, "Task(..)"),
+            Value::Socket(_) => write!(f, "Socket(..)"),
+            Value::Server(_) => write!(f, "Server(..)"),
+        }
+    }
 }
 
 impl Value {
@@ -55,18 +74,15 @@ impl Value {
                 s
             }
             Value::Str(s) => s.clone(),
-            Value::Array(_) | Value::Object(_) => {
-                // best-effort JSON-ish string
-                match to_json(self) {
-                    Ok(v) => v.to_string(),
-                    Err(_) => format!("{self:?}"),
-                }
-            }
+            Value::Array(_) | Value::Object(_) => match to_json(self) {
+                Ok(v) => v.to_string(),
+                Err(_) => format!("{self:?}"),
+            },
             Value::Regex(p) => format!("r\"{p}\""),
+            Value::Function(_) => "<function>".to_string(),
             Value::Task(_) => "<task>".to_string(),
             Value::Socket(_) => "<socket>".to_string(),
             Value::Server(_) => "<server>".to_string(),
-            Value::Function(_) => "<function>".to_string(),
         }
     }
 }
@@ -119,20 +135,66 @@ impl Env {
     }
 }
 
-#[async_trait::async_trait]
-pub trait Callable: Send + Sync {
+#[async_trait::async_trait(?Send)]
+pub trait Callable {
     async fn call(&self, rt: &mut Runtime, args: Vec<Value>) -> anyhow::Result<Value>;
 }
 
-struct Builtin {
-    name: &'static str,
-    f: fn(&mut Runtime, Vec<Value>) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>>,
+#[derive(Copy, Clone)]
+enum BuiltinKind {
+    Chill,
+    Spit,
+    Yeet,
+    Flex,
+    Ghost,
+    Decode,
+    Encode,
+    Hunt,
+    Swap,
+    Matches,
+    Split,
+    Snag,
+    Stash,
+    KeepAdding,
+    Trash,
+    FileExists,
+    Listen,
+    Holla,
+    Peek,
+    Whisper,
+    Dip,
 }
 
-#[async_trait::async_trait]
+struct Builtin {
+    kind: BuiltinKind,
+}
+
+#[async_trait::async_trait(?Send)]
 impl Callable for Builtin {
     async fn call(&self, rt: &mut Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
-        (self.f)(rt, args).await
+        match self.kind {
+            BuiltinKind::Chill => b_chill(args).await,
+            BuiltinKind::Spit => b_spit(rt, args).await,
+            BuiltinKind::Yeet => b_yeet(rt, args).await,
+            BuiltinKind::Flex => b_flex(rt, args).await,
+            BuiltinKind::Ghost => b_ghost(rt, args).await,
+            BuiltinKind::Decode => b_decode(args).await,
+            BuiltinKind::Encode => b_encode(args).await,
+            BuiltinKind::Hunt => b_hunt(args).await,
+            BuiltinKind::Swap => b_swap(args).await,
+            BuiltinKind::Matches => b_matches(args).await,
+            BuiltinKind::Split => b_split(args).await,
+            BuiltinKind::Snag => b_snag(args).await,
+            BuiltinKind::Stash => b_stash(args).await,
+            BuiltinKind::KeepAdding => b_keepadding(args).await,
+            BuiltinKind::Trash => b_trash(args).await,
+            BuiltinKind::FileExists => b_fileexists(args).await,
+            BuiltinKind::Listen => b_listen(args).await,
+            BuiltinKind::Holla => b_holla(args).await,
+            BuiltinKind::Peek => b_peek(args).await,
+            BuiltinKind::Whisper => b_whisper(args).await,
+            BuiltinKind::Dip => b_dip(args).await,
+        }
     }
 }
 
@@ -144,7 +206,7 @@ struct UserFunction {
     closure: Env,
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl Callable for UserFunction {
     async fn call(&self, rt: &mut Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
         if args.len() != self.params.len() {
@@ -188,38 +250,48 @@ impl Runtime {
     }
 
     fn install_builtins(&mut self) {
-        self.globals.define("Chill", Value::Function(Arc::new(Builtin { name: "Chill", f: b_chill })), true);
-        self.globals.define("Spit", Value::Function(Arc::new(Builtin { name: "Spit", f: b_spit })), true);
-        self.globals.define("Yeet", Value::Function(Arc::new(Builtin { name: "Yeet", f: b_yeet })), true);
-        self.globals.define("Flex", Value::Function(Arc::new(Builtin { name: "Flex", f: b_flex })), true);
-        self.globals.define("Ghost", Value::Function(Arc::new(Builtin { name: "Ghost", f: b_ghost })), true);
-
-        self.globals.define("Decode", Value::Function(Arc::new(Builtin { name: "Decode", f: b_decode })), true);
-        self.globals.define("Encode", Value::Function(Arc::new(Builtin { name: "Encode", f: b_encode })), true);
-
-        self.globals.define("Hunt", Value::Function(Arc::new(Builtin { name: "Hunt", f: b_hunt })), true);
-        self.globals.define("Swap", Value::Function(Arc::new(Builtin { name: "Swap", f: b_swap })), true);
-        self.globals.define("Matches", Value::Function(Arc::new(Builtin { name: "Matches", f: b_matches })), true);
-        self.globals.define("Split", Value::Function(Arc::new(Builtin { name: "Split", f: b_split })), true);
-
-        self.globals.define("Snag", Value::Function(Arc::new(Builtin { name: "Snag", f: b_snag })), true);
-        self.globals.define("Stash", Value::Function(Arc::new(Builtin { name: "Stash", f: b_stash })), true);
-        self.globals.define("KeepAdding", Value::Function(Arc::new(Builtin { name: "KeepAdding", f: b_keepadding })), true);
-        self.globals.define("Trash", Value::Function(Arc::new(Builtin { name: "Trash", f: b_trash })), true);
-        self.globals.define("FileExists", Value::Function(Arc::new(Builtin { name: "FileExists", f: b_fileexists })), true);
-
-        self.globals.define("Listen", Value::Function(Arc::new(Builtin { name: "Listen", f: b_listen })), true);
-        self.globals.define("Holla", Value::Function(Arc::new(Builtin { name: "Holla", f: b_holla })), true);
-        self.globals.define("Peek", Value::Function(Arc::new(Builtin { name: "Peek", f: b_peek })), true);
-        self.globals.define("Whisper", Value::Function(Arc::new(Builtin { name: "Whisper", f: b_whisper })), true);
-        self.globals.define("Dip", Value::Function(Arc::new(Builtin { name: "Dip", f: b_dip })), true);
+        self.globals.define("Chill", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Chill })), true);
+        self.globals.define("Spit", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Spit })), true);
+        self.globals.define("Yeet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Yeet })), true);
+        self.globals.define("Flex", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Flex })), true);
+        self.globals.define("Ghost", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Ghost })), true);
+        self.globals.define("Decode", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Decode })), true);
+        self.globals.define("Encode", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Encode })), true);
+        self.globals.define("Hunt", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Hunt })), true);
+        self.globals.define("Swap", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Swap })), true);
+        self.globals.define("Matches", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Matches })), true);
+        self.globals.define("Split", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Split })), true);
+        self.globals.define("Snag", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Snag })), true);
+        self.globals.define("Stash", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Stash })), true);
+        self.globals.define(
+            "KeepAdding",
+            Value::Function(Rc::new(Builtin { kind: BuiltinKind::KeepAdding })),
+            true,
+        );
+        self.globals.define("Trash", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Trash })), true);
+        self.globals.define(
+            "FileExists",
+            Value::Function(Rc::new(Builtin { kind: BuiltinKind::FileExists })),
+            true,
+        );
+        self.globals.define("Listen", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Listen })), true);
+        self.globals.define("Holla", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Holla })), true);
+        self.globals.define("Peek", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Peek })), true);
+        self.globals.define(
+            "Whisper",
+            Value::Function(Rc::new(Builtin { kind: BuiltinKind::Whisper })),
+            true,
+        );
+        self.globals.define("Dip", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Dip })), true);
     }
 
     pub async fn exec_program(&mut self, program: &Program) -> anyhow::Result<()> {
         let mut frame = Frame::default();
+        let mut globals = std::mem::take(&mut self.globals);
         for s in &program.statements {
-            self.exec_stmt(s, &mut self.globals, &mut frame).await?;
+            self.exec_stmt(s, &mut globals, &mut frame).await?;
         }
+        self.globals = globals;
         Ok(())
     }
 
@@ -244,16 +316,14 @@ impl Runtime {
                 let v = self.eval_expr(value, env, frame).await?;
                 env.set(name, v)?;
             }
-            Stmt::FuncDef {
-                name, params, body, ..
-            } => {
+            Stmt::FuncDef { name, params, body, .. } => {
                 let f = UserFunction {
                     name: name.clone(),
                     params: params.clone(),
                     body: body.clone(),
                     closure: env.clone(),
                 };
-                env.define(name, Value::Function(Arc::new(f)), true);
+                env.define(name, Value::Function(Rc::new(f)), true);
             }
             Stmt::Rizz { value, .. } => {
                 let v = self.eval_expr(value, env, frame).await?;
@@ -267,13 +337,7 @@ impl Runtime {
             Stmt::ExprStmt { expr, .. } => {
                 let _ = self.eval_expr(expr, env, frame).await?;
             }
-            Stmt::IfChain {
-                cond,
-                then_block,
-                elifs,
-                else_block,
-                ..
-            } => {
+            Stmt::IfChain { cond, then_block, elifs, else_block, .. } => {
                 if self.eval_expr(cond, env, frame).await?.truthy() {
                     let mut child = env.child();
                     self.exec_block(then_block, &mut child, frame).await?;
@@ -317,6 +381,7 @@ impl Runtime {
         Ok(())
     }
 
+    #[async_recursion::async_recursion(?Send)]
     async fn eval_expr(&mut self, e: &Expr, env: &mut Env, frame: &mut Frame) -> anyhow::Result<Value> {
         match e {
             Expr::Ident { name, .. } => env.get(name),
@@ -385,12 +450,7 @@ impl Runtime {
                 }
                 Ok(Value::Array(out))
             }
-            Expr::Ternary {
-                cond,
-                if_true,
-                if_false,
-                ..
-            } => {
+            Expr::Ternary { cond, if_true, if_false, .. } => {
                 if self.eval_expr(cond, env, frame).await?.truthy() {
                     self.eval_expr(if_true, env, frame).await
                 } else {
@@ -428,23 +488,15 @@ impl Runtime {
             }
             Expr::Vibe { expr, .. } => {
                 let mut snap = env.clone();
-                let e2 = expr.clone();
-                // Spawn a task that evaluates the expression in a cloned env.
-                let handle = tokio::spawn(async move {
-                    // Each spawned task uses its own runtime clone for IO client state etc.
-                    // For v0.1 we keep it simple: create a new runtime with same filename.
+                let e2 = (*expr.clone()).clone();
+                let handle = tokio::task::spawn_local(async move {
                     let mut rt = Runtime::new("<task>");
                     let mut frame = Frame::default();
                     rt.eval_expr(&e2, &mut snap, &mut frame).await
                 });
-                Ok(Value::Task(Arc::new(Mutex::new(Some(handle)))))
+                Ok(Value::Task(Rc::new(RefCell::new(Some(handle)))))
             }
-            Expr::Attempt {
-                try_block,
-                err_name,
-                catch_block,
-                ..
-            } => {
+            Expr::Attempt { try_block, err_name, catch_block, .. } => {
                 let mut child = env.child();
                 let mut local_frame = Frame::default();
                 let res = self.exec_block(try_block, &mut child, &mut local_frame).await;
@@ -493,7 +545,7 @@ fn binop(op: &str, l: Value, r: Value) -> anyhow::Result<Value> {
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + b as f64)),
-            (a, b) => bail!("Unsupported + operands: {:?} and {:?}", a, b),
+            _ => bail!("Unsupported + operands"),
         },
         "-" => match (l, r) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
@@ -558,7 +610,11 @@ fn to_json(v: &Value) -> anyhow::Result<serde_json::Value> {
             serde_json::Number::from_f64(*f).ok_or_else(|| anyhow!("bad float"))?,
         ),
         Value::Str(s) => serde_json::Value::String(s.clone()),
-        Value::Array(a) => serde_json::Value::Array(a.iter().map(|x| to_json(x)).collect::<Result<_, _>>()?),
+        Value::Array(a) => serde_json::Value::Array(
+            a.iter()
+                .map(|x| to_json(x))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
         Value::Object(o) => {
             let mut map = serde_json::Map::new();
             for (k, v) in o.iter() {
@@ -569,388 +625,6 @@ fn to_json(v: &Value) -> anyhow::Result<serde_json::Value> {
         Value::Regex(p) => serde_json::Value::String(p.clone()),
         _ => serde_json::Value::String(v.as_string()),
     })
-}
-
-// --- builtins ---
-
-fn b_chill(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 1 {
-            bail!("Chill(task) expects 1 arg");
-        }
-        match &args[0] {
-            Value::Task(h) => {
-                let mut guard = h.lock().await;
-                let handle = guard.take().ok_or_else(|| anyhow!("Task already awaited"))?;
-                handle.await?
-            }
-            Value::Server(h) => {
-                let mut guard = h.lock().await;
-                let handle = guard.take().ok_or_else(|| anyhow!("Server already awaited"))?;
-                handle.await??;
-                Ok(Value::Null)
-            }
-            other => Ok(other.clone()),
-        }
-    })
-}
-
-async fn http_req(rt: &mut Runtime, method: &str, url: &str, data: Option<Value>, headers: Option<Value>) -> anyhow::Result<Value> {
-    let mut req = rt.client.request(method.parse()?, url);
-    if let Some(Value::Object(h)) = headers {
-        for (k, v) in h {
-            req = req.header(k, v.as_string());
-        }
-    }
-    if let Some(d) = data {
-        match d {
-            Value::Object(_) | Value::Array(_) => {
-                let js = to_json(&d)?;
-                req = req.json(&js);
-            }
-            other => {
-                req = req.body(other.as_string());
-            }
-        }
-    }
-    let resp = req.send().await?;
-    let status = resp.status().as_u16() as i64;
-    let body = resp.text().await?;
-    let mut out = BTreeMap::new();
-    out.insert("status".to_string(), Value::Int(status));
-    out.insert("body".to_string(), Value::Str(body));
-    Ok(Value::Object(out))
-}
-
-fn b_spit(
-    rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    let url = args.get(0).cloned();
-    let headers = args.get(1).cloned();
-    Box::pin(async move {
-        let url = url.ok_or_else(|| anyhow!("Spit(url, headers?)"))?.as_string();
-        http_req(rt, "GET", &url, None, headers).await
-    })
-}
-
-fn b_yeet(
-    rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    let url = args.get(0).cloned();
-    let data = args.get(1).cloned();
-    let headers = args.get(2).cloned();
-    Box::pin(async move {
-        let url = url.ok_or_else(|| anyhow!("Yeet(url, data, headers?)"))?.as_string();
-        let data = data.ok_or_else(|| anyhow!("Yeet(url, data, headers?)"))?;
-        http_req(rt, "POST", &url, Some(data), headers).await
-    })
-}
-
-fn b_flex(
-    rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    let url = args.get(0).cloned();
-    let data = args.get(1).cloned();
-    let headers = args.get(2).cloned();
-    Box::pin(async move {
-        let url = url.ok_or_else(|| anyhow!("Flex(url, data, headers?)"))?.as_string();
-        let data = data.ok_or_else(|| anyhow!("Flex(url, data, headers?)"))?;
-        http_req(rt, "PUT", &url, Some(data), headers).await
-    })
-}
-
-fn b_ghost(
-    rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    let url = args.get(0).cloned();
-    let headers = args.get(1).cloned();
-    Box::pin(async move {
-        let url = url.ok_or_else(|| anyhow!("Ghost(url, headers?)"))?.as_string();
-        http_req(rt, "DELETE", &url, None, headers).await
-    })
-}
-
-fn b_decode(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 1 {
-            bail!("Decode(jsonString)");
-        }
-        let s = args[0].as_string();
-        let v: serde_json::Value = serde_json::from_str(&s)?;
-        Ok(from_json(v))
-    })
-}
-
-fn b_encode(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 1 {
-            bail!("Encode(obj)");
-        }
-        let v = to_json(&args[0])?;
-        Ok(Value::Str(serde_json::to_string(&v)?))
-    })
-}
-
-fn b_hunt(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 2 {
-            bail!("Hunt(text, pattern)");
-        }
-        let text = args[0].as_string();
-        let pat = regex_pat(&args[1]);
-        let re = Regex::new(&pat)?;
-        let mut out = Vec::new();
-        for m in re.find_iter(&text) {
-            out.push(Value::Str(m.as_str().to_string()));
-        }
-        Ok(Value::Array(out))
-    })
-}
-
-fn b_swap(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 3 {
-            bail!("Swap(text, pattern, replacement)");
-        }
-        let text = args[0].as_string();
-        let pat = regex_pat(&args[1]);
-        let repl = args[2].as_string();
-        let re = Regex::new(&pat)?;
-        Ok(Value::Str(re.replace_all(&text, repl).to_string()))
-    })
-}
-
-fn b_matches(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 2 {
-            bail!("Matches(text, pattern)");
-        }
-        let text = args[0].as_string();
-        let pat = regex_pat(&args[1]);
-        let re = Regex::new(&pat)?;
-        Ok(Value::Bool(re.is_match(&text)))
-    })
-}
-
-fn b_split(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 2 {
-            bail!("Split(text, pattern)");
-        }
-        let text = args[0].as_string();
-        let pat = regex_pat(&args[1]);
-        let re = Regex::new(&pat)?;
-        Ok(Value::Array(
-            re.split(&text).map(|s| Value::Str(s.to_string())).collect(),
-        ))
-    })
-}
-
-fn b_snag(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 1 {
-            bail!("Snag(path)");
-        }
-        let path = args[0].as_string();
-        let text = tokio::fs::read_to_string(path).await?;
-        Ok(Value::Str(text))
-    })
-}
-
-fn b_stash(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 2 {
-            bail!("Stash(path, text)");
-        }
-        let path = args[0].as_string();
-        let text = args[1].as_string();
-        tokio::fs::write(path, text).await?;
-        Ok(Value::Null)
-    })
-}
-
-fn b_keepadding(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 2 {
-            bail!("KeepAdding(path, text)");
-        }
-        let path = args[0].as_string();
-        let text = args[1].as_string();
-        let mut file = tokio::fs::OpenOptions::new().create(true).append(true).open(path).await?;
-        file.write_all(text.as_bytes()).await?;
-        Ok(Value::Null)
-    })
-}
-
-fn b_trash(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 1 {
-            bail!("Trash(path)");
-        }
-        let path = args[0].as_string();
-        tokio::fs::remove_file(path).await?;
-        Ok(Value::Null)
-    })
-}
-
-fn b_fileexists(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 1 {
-            bail!("FileExists(path)");
-        }
-        let path = args[0].as_string();
-        Ok(Value::Bool(tokio::fs::try_exists(path).await?))
-    })
-}
-
-fn b_listen(
-    rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    let handler = args.get(1).cloned();
-    let port = args.get(0).cloned();
-    let mut rt2 = Runtime::new(&rt.filename);
-    Box::pin(async move {
-        if port.is_none() || handler.is_none() {
-            bail!("Listen(port, handler)");
-        }
-        let port = to_i64(&port.unwrap())? as u16;
-        let handler = match handler.unwrap() {
-            Value::Function(f) => f,
-            _ => bail!("Listen expects function handler"),
-        };
-        let listener = TcpListener::bind(("0.0.0.0", port)).await?;
-        let handle = tokio::spawn(async move {
-            loop {
-                let (stream, _) = listener.accept().await?;
-                let sock = Value::Socket(Arc::new(Mutex::new(stream)));
-                let _ = handler.call(&mut rt2, vec![sock]).await?;
-            }
-            #[allow(unreachable_code)]
-            Ok::<(), anyhow::Error>(())
-        });
-        Ok(Value::Server(Arc::new(Mutex::new(handle))))
-    })
-}
-
-fn b_holla(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 2 {
-            bail!("Holla(host, port)");
-        }
-        let host = args[0].as_string();
-        let port = to_i64(&args[1])? as u16;
-        let stream = TcpStream::connect((host.as_str(), port)).await?;
-        Ok(Value::Socket(Arc::new(Mutex::new(stream))))
-    })
-}
-
-fn b_peek(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 1 {
-            bail!("Peek(socket)");
-        }
-        let sock = match &args[0] {
-            Value::Socket(s) => s.clone(),
-            _ => bail!("Peek expects socket"),
-        };
-        let mut buf = vec![0u8; 4096];
-        let mut s = sock.lock().await;
-        let n = s.read(&mut buf).await?;
-        buf.truncate(n);
-        Ok(Value::Str(String::from_utf8_lossy(&buf).to_string()))
-    })
-}
-
-fn b_whisper(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 2 {
-            bail!("Whisper(socket, text)");
-        }
-        let sock = match &args[0] {
-            Value::Socket(s) => s.clone(),
-            _ => bail!("Whisper expects socket"),
-        };
-        let msg = args[1].as_string();
-        let mut s = sock.lock().await;
-        s.write_all(msg.as_bytes()).await?;
-        Ok(Value::Null)
-    })
-}
-
-fn b_dip(
-    _rt: &mut Runtime,
-    args: Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Value>> + Send>> {
-    Box::pin(async move {
-        if args.len() != 1 {
-            bail!("Dip(socket)");
-        }
-        let sock = match &args[0] {
-            Value::Socket(s) => s.clone(),
-            _ => bail!("Dip expects socket"),
-        };
-        let mut s = sock.lock().await;
-        s.shutdown().await?;
-        Ok(Value::Null)
-    })
-}
-
-fn regex_pat(v: &Value) -> String {
-    match v {
-        Value::Regex(p) => p.clone(),
-        Value::Str(s) => s.clone(),
-        other => other.as_string(),
-    }
 }
 
 fn from_json(v: serde_json::Value) -> Value {
@@ -976,5 +650,284 @@ fn from_json(v: serde_json::Value) -> Value {
             Value::Object(map)
         }
     }
+}
+
+fn regex_pat(v: &Value) -> String {
+    match v {
+        Value::Regex(p) => p.clone(),
+        Value::Str(s) => s.clone(),
+        other => other.as_string(),
+    }
+}
+
+// --- builtins ---
+
+async fn b_chill(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Chill(task) expects 1 arg");
+    }
+    match &args[0] {
+        Value::Task(h) => {
+            let handle = h
+                .borrow_mut()
+                .take()
+                .ok_or_else(|| anyhow!("Task already awaited"))?;
+            handle.await?
+        }
+        Value::Server(h) => {
+            let handle = h
+                .borrow_mut()
+                .take()
+                .ok_or_else(|| anyhow!("Server already awaited"))?;
+            handle.await??;
+            Ok(Value::Null)
+        }
+        other => Ok(other.clone()),
+    }
+}
+
+async fn http_req(rt: &Runtime, method: &str, url: &str, data: Option<Value>, headers: Option<Value>) -> anyhow::Result<Value> {
+    let mut req = rt.client.request(method.parse()?, url);
+    if let Some(Value::Object(h)) = headers {
+        for (k, v) in h {
+            req = req.header(k, v.as_string());
+        }
+    }
+    if let Some(d) = data {
+        match d {
+            Value::Object(_) | Value::Array(_) => {
+                let js = to_json(&d)?;
+                req = req.json(&js);
+            }
+            other => req = req.body(other.as_string()),
+        }
+    }
+    let resp = req.send().await?;
+    let status = resp.status().as_u16() as i64;
+    let body = resp.text().await?;
+    let mut out = BTreeMap::new();
+    out.insert("status".to_string(), Value::Int(status));
+    out.insert("body".to_string(), Value::Str(body));
+    Ok(Value::Object(out))
+}
+
+async fn b_spit(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
+    if !(1..=2).contains(&args.len()) {
+        bail!("Spit(url, headers?)");
+    }
+    let url = args[0].as_string();
+    let headers = args.get(1).cloned();
+    http_req(rt, "GET", &url, None, headers).await
+}
+
+async fn b_yeet(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
+    if !(2..=3).contains(&args.len()) {
+        bail!("Yeet(url, data, headers?)");
+    }
+    let url = args[0].as_string();
+    let data = args[1].clone();
+    let headers = args.get(2).cloned();
+    http_req(rt, "POST", &url, Some(data), headers).await
+}
+
+async fn b_flex(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
+    if !(2..=3).contains(&args.len()) {
+        bail!("Flex(url, data, headers?)");
+    }
+    let url = args[0].as_string();
+    let data = args[1].clone();
+    let headers = args.get(2).cloned();
+    http_req(rt, "PUT", &url, Some(data), headers).await
+}
+
+async fn b_ghost(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
+    if !(1..=2).contains(&args.len()) {
+        bail!("Ghost(url, headers?)");
+    }
+    let url = args[0].as_string();
+    let headers = args.get(1).cloned();
+    http_req(rt, "DELETE", &url, None, headers).await
+}
+
+async fn b_decode(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Decode(jsonString)");
+    }
+    let s = args[0].as_string();
+    let v: serde_json::Value = serde_json::from_str(&s)?;
+    Ok(from_json(v))
+}
+
+async fn b_encode(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Encode(obj)");
+    }
+    let v = to_json(&args[0])?;
+    Ok(Value::Str(serde_json::to_string(&v)?))
+}
+
+async fn b_hunt(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("Hunt(text, pattern)");
+    }
+    let text = args[0].as_string();
+    let pat = regex_pat(&args[1]);
+    let re = Regex::new(&pat)?;
+    let out = re
+        .find_iter(&text)
+        .map(|m| Value::Str(m.as_str().to_string()))
+        .collect();
+    Ok(Value::Array(out))
+}
+
+async fn b_swap(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        bail!("Swap(text, pattern, replacement)");
+    }
+    let text = args[0].as_string();
+    let pat = regex_pat(&args[1]);
+    let repl = args[2].as_string();
+    let re = Regex::new(&pat)?;
+    Ok(Value::Str(re.replace_all(&text, repl).to_string()))
+}
+
+async fn b_matches(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("Matches(text, pattern)");
+    }
+    let text = args[0].as_string();
+    let pat = regex_pat(&args[1]);
+    let re = Regex::new(&pat)?;
+    Ok(Value::Bool(re.is_match(&text)))
+}
+
+async fn b_split(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("Split(text, pattern)");
+    }
+    let text = args[0].as_string();
+    let pat = regex_pat(&args[1]);
+    let re = Regex::new(&pat)?;
+    Ok(Value::Array(
+        re.split(&text).map(|s| Value::Str(s.to_string())).collect(),
+    ))
+}
+
+async fn b_snag(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Snag(path)");
+    }
+    Ok(Value::Str(tokio::fs::read_to_string(args[0].as_string()).await?))
+}
+
+async fn b_stash(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("Stash(path, text)");
+    }
+    tokio::fs::write(args[0].as_string(), args[1].as_string()).await?;
+    Ok(Value::Null)
+}
+
+async fn b_keepadding(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("KeepAdding(path, text)");
+    }
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(args[0].as_string())
+        .await?;
+    file.write_all(args[1].as_string().as_bytes()).await?;
+    Ok(Value::Null)
+}
+
+async fn b_trash(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Trash(path)");
+    }
+    tokio::fs::remove_file(args[0].as_string()).await?;
+    Ok(Value::Null)
+}
+
+async fn b_fileexists(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("FileExists(path)");
+    }
+    Ok(Value::Bool(tokio::fs::try_exists(args[0].as_string()).await?))
+}
+
+async fn b_listen(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("Listen(port, handler)");
+    }
+    let port = to_i64(&args[0])? as u16;
+    let handler = match &args[1] {
+        Value::Function(f) => f.clone(),
+        _ => bail!("Listen expects function handler"),
+    };
+    let listener = TcpListener::bind(("0.0.0.0", port)).await?;
+    let handle = tokio::task::spawn_local(async move {
+        let mut rt = Runtime::new("<server>");
+        loop {
+            let (stream, _) = listener.accept().await?;
+            let sock = Value::Socket(Rc::new(tokio::sync::Mutex::new(stream)));
+            let _ = handler.call(&mut rt, vec![sock]).await?;
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), anyhow::Error>(())
+    });
+    Ok(Value::Server(Rc::new(RefCell::new(Some(handle)))))
+}
+
+async fn b_holla(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("Holla(host, port)");
+    }
+    let host = args[0].as_string();
+    let port = to_i64(&args[1])? as u16;
+    let stream = TcpStream::connect((host.as_str(), port)).await?;
+    Ok(Value::Socket(Rc::new(tokio::sync::Mutex::new(stream))))
+}
+
+async fn b_peek(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Peek(socket)");
+    }
+    let sock = match &args[0] {
+        Value::Socket(s) => s.clone(),
+        _ => bail!("Peek expects socket"),
+    };
+    let mut buf = vec![0u8; 4096];
+    let mut s = sock.lock().await;
+    let n = s.read(&mut buf).await?;
+    buf.truncate(n);
+    Ok(Value::Str(String::from_utf8_lossy(&buf).to_string()))
+}
+
+async fn b_whisper(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("Whisper(socket, text)");
+    }
+    let sock = match &args[0] {
+        Value::Socket(s) => s.clone(),
+        _ => bail!("Whisper expects socket"),
+    };
+    let msg = args[1].as_string();
+    let mut s = sock.lock().await;
+    s.write_all(msg.as_bytes()).await?;
+    Ok(Value::Null)
+}
+
+async fn b_dip(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Dip(socket)");
+    }
+    let sock = match &args[0] {
+        Value::Socket(s) => s.clone(),
+        _ => bail!("Dip expects socket"),
+    };
+    let mut s = sock.lock().await;
+    s.shutdown().await?;
+    Ok(Value::Null)
 }
 

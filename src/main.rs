@@ -15,18 +15,24 @@ enum Command {
     Run { file: PathBuf },
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-
-    match cli.cmd {
-        Command::Run { file } => {
-            let src = tokio::fs::read_to_string(&file).await?;
-            let program = rizzscript::parser::parse_program(&src, file.to_string_lossy().as_ref())?;
-            let mut rt = rizzscript::runtime::Runtime::new(file.to_string_lossy().as_ref());
-            rt.exec_program(&program).await?;
-        }
-    }
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let cli = Cli::parse();
+            match cli.cmd {
+                Command::Run { file } => {
+                    let src = tokio::fs::read_to_string(&file).await?;
+                    let program =
+                        rizzscript::parser::parse_program(&src, file.to_string_lossy().as_ref())?;
+                    let mut rt = rizzscript::runtime::Runtime::new(file.to_string_lossy().as_ref());
+                    rt.exec_program(&program).await?;
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .await?;
 
     Ok(())
 }
