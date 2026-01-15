@@ -33,6 +33,8 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Print version
+    Version,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -72,6 +74,9 @@ Vibe main()
                 }
                 Command::Format { path, check } => {
                     format_paths(&path, check)?;
+                }
+                Command::Version => {
+                    println!("{}", env!("CARGO_PKG_VERSION"));
                 }
             }
             Ok::<(), anyhow::Error>(())
