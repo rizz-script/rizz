@@ -21,4 +21,5 @@ tokio = { version = "1.43.0", features = ["macros", "rt", "rt-multi-thread", "ne
 reqwest = { version = "0.11.24", default-features = false, features = ["json", "rustls-tls"] }
 # Pin url to pre-icu/idna1 stack for rustc 1.82 compatibility.
 url = "=2.4.1"
+rand = "0.8.5"
 

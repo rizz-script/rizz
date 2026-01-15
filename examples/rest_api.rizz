@@ -1,0 +1,36 @@
+Yoo PORT = 3000
+
+Yoo QUOTES = [
+  "Stay hungry, stay foolish.",
+  "Simplicity is the ultimate sophistication.",
+  "Ship fast, learn faster.",
+  "Make it work, make it right, make it fast.",
+  "The best way out is always through."
+]
+
+Bruh handleRequest(req) HawkTuah {
+  Ayo method = req.method
+  Ayo path = req.path
+
+  Maybe method == "GET" && Matches(path, r"^/[^/]+$") {
+    // GET /:name  -> "Awwm <name> is a pookie"
+    Ayo m = Hunt(path, r"^/([^/]+)$")
+    Ayo name = Maybe Len(m) > 0 ? m[0] : "friend"
+    Rizz({"status": 200, "body": "Awwm " + name + " is a pookie"})
+  } Unless Maybe method == "POST" && path == "/great" {
+    // POST /great -> random quote
+    Ayo quote = Pick(QUOTES)
+    Rizz({"status": 200, "body": quote})
+  } Unless {
+    Rizz({"status": 404, "body": "not found"})
+  }
+}
+
+Bruh main() HawkTuah {
+  Rizz("HTTP server on " + PORT)
+  Ayo server = Listen(PORT, handleRequest)
+  Chill(server)
+}
+
+Vibe main()
+

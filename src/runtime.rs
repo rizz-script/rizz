@@ -1,9 +1,11 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail};
+use rand::Rng;
 use regex::Regex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -21,6 +23,7 @@ pub enum Value {
     Array(Vec<Value>),
     Object(BTreeMap<String, Value>),
     Regex(String),
+    HashMap(Rc<RefCell<HashMap<String, Value>>>),
 
     Function(Rc<dyn Callable>),
     Task(Rc<RefCell<Option<JoinHandle<anyhow::Result<Value>>>>>),
@@ -39,6 +42,7 @@ impl fmt::Debug for Value {
             Value::Array(a) => write!(f, "Array(len={})", a.len()),
             Value::Object(o) => write!(f, "Object(len={})", o.len()),
             Value::Regex(p) => write!(f, "Regex({p:?})"),
+            Value::HashMap(_) => write!(f, "HashMap(..)"),
             Value::Function(_) => write!(f, "Function(..)"),
             Value::Task(_) => write!(f, "Task(..)"),
             Value::Socket(_) => write!(f, "Socket(..)"),
@@ -79,6 +83,7 @@ impl Value {
                 Err(_) => format!("{self:?}"),
             },
             Value::Regex(p) => format!("r\"{p}\""),
+            Value::HashMap(_) => "<hashmap>".to_string(),
             Value::Function(_) => "<function>".to_string(),
             Value::Task(_) => "<task>".to_string(),
             Value::Socket(_) => "<socket>".to_string(),
@@ -177,6 +182,13 @@ enum BuiltinKind {
     Peek,
     Whisper,
     Dip,
+    Len,
+    Trim,
+    Pick,
+    HashMap,
+    HGet,
+    HSet,
+    HDel,
 }
 
 struct Builtin {
@@ -208,6 +220,13 @@ impl Callable for Builtin {
             BuiltinKind::Peek => b_peek(args).await,
             BuiltinKind::Whisper => b_whisper(args).await,
             BuiltinKind::Dip => b_dip(args).await,
+            BuiltinKind::Len => b_len(args).await,
+            BuiltinKind::Trim => b_trim(args).await,
+            BuiltinKind::Pick => b_pick(args).await,
+            BuiltinKind::HashMap => b_hashmap(args).await,
+            BuiltinKind::HGet => b_hget(args).await,
+            BuiltinKind::HSet => b_hset(args).await,
+            BuiltinKind::HDel => b_hdel(args).await,
         }
     }
 }
@@ -255,7 +274,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn new(filename: &str) -> Self {
+    pub fn new(filename: &str, args: Vec<String>) -> Self {
         let mut rt = Self {
             filename: filename.to_string(),
             globals: Env::default(),
@@ -263,7 +282,13 @@ impl Runtime {
             tasks: Vec::new(),
         };
         rt.install_builtins();
+        rt.install_args(args);
         rt
+    }
+
+    fn install_args(&mut self, args: Vec<String>) {
+        let arr = args.into_iter().map(Value::Str).collect::<Vec<_>>();
+        self.globals.define("ARGS", Value::Array(arr), true);
     }
 
     fn install_builtins(&mut self) {
@@ -300,6 +325,18 @@ impl Runtime {
             true,
         );
         self.globals.define("Dip", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Dip })), true);
+
+        self.globals.define("Len", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Len })), true);
+        self.globals.define("Trim", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Trim })), true);
+        self.globals.define("Pick", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Pick })), true);
+        self.globals.define(
+            "HashMap",
+            Value::Function(Rc::new(Builtin { kind: BuiltinKind::HashMap })),
+            true,
+        );
+        self.globals.define("HGet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HGet })), true);
+        self.globals.define("HSet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HSet })), true);
+        self.globals.define("HDel", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HDel })), true);
     }
 
     pub async fn exec_program(&mut self, program: &Program) -> anyhow::Result<()> {
@@ -525,7 +562,7 @@ impl Runtime {
                 let mut snap = env.clone();
                 let e2 = (*expr.clone()).clone();
                 let handle = tokio::task::spawn_local(async move {
-                    let mut rt = Runtime::new("<task>");
+                    let mut rt = Runtime::new("<task>", vec![]);
                     let mut frame = Frame::default();
                     rt.eval_expr(&e2, &mut snap, &mut frame).await
                 });
@@ -661,6 +698,13 @@ fn to_json(v: &Value) -> anyhow::Result<serde_json::Value> {
             serde_json::Value::Object(map)
         }
         Value::Regex(p) => serde_json::Value::String(p.clone()),
+        Value::HashMap(h) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in h.borrow().iter() {
+                map.insert(k.clone(), to_json(v)?);
+            }
+            serde_json::Value::Object(map)
+        }
         _ => serde_json::Value::String(v.as_string()),
     })
 }
@@ -811,10 +855,21 @@ async fn b_hunt(args: Vec<Value>) -> anyhow::Result<Value> {
     let text = args[0].as_string();
     let pat = regex_pat(&args[1]);
     let re = Regex::new(&pat)?;
-    let out = re
-        .find_iter(&text)
-        .map(|m| Value::Str(m.as_str().to_string()))
-        .collect();
+    let mut out = Vec::new();
+    let has_groups = re.captures_len() > 1;
+    if has_groups {
+        for caps in re.captures_iter(&text) {
+            if let Some(m) = caps.get(1) {
+                out.push(Value::Str(m.as_str().to_string()));
+            } else if let Some(m) = caps.get(0) {
+                out.push(Value::Str(m.as_str().to_string()));
+            }
+        }
+    } else {
+        for m in re.find_iter(&text) {
+            out.push(Value::Str(m.as_str().to_string()));
+        }
+    }
     Ok(Value::Array(out))
 }
 
@@ -905,16 +960,160 @@ async fn b_listen(args: Vec<Value>) -> anyhow::Result<Value> {
     };
     let listener = TcpListener::bind(("0.0.0.0", port)).await?;
     let handle = tokio::task::spawn_local(async move {
-        let mut rt = Runtime::new("<server>");
         loop {
             let (stream, _) = listener.accept().await?;
-            let sock = Value::Socket(Rc::new(tokio::sync::Mutex::new(stream)));
-            let _ = handler.call(&mut rt, vec![sock]).await?;
+            let handler = handler.clone();
+            tokio::task::spawn_local(async move {
+                let _ = handle_incoming_connection(stream, handler).await;
+            });
         }
         #[allow(unreachable_code)]
         Ok::<(), anyhow::Error>(())
     });
     Ok(Value::Server(Rc::new(RefCell::new(Some(handle)))))
+}
+
+async fn handle_incoming_connection(mut stream: TcpStream, handler: Rc<dyn Callable>) -> anyhow::Result<()> {
+    let mut peek_buf = [0u8; 1024];
+    let n = stream.peek(&mut peek_buf).await?;
+    let s = String::from_utf8_lossy(&peek_buf[..n]);
+
+    if s.starts_with("GET ")
+        || s.starts_with("POST ")
+        || s.starts_with("PUT ")
+        || s.starts_with("DELETE ")
+        || s.starts_with("PATCH ")
+    {
+        if s.contains("HTTP/") {
+            let (req, body_bytes) = read_http_request(&mut stream).await?;
+            let mut rt = Runtime::new("<http>", vec![]);
+            let resp_val = handler.call(&mut rt, vec![req]).await?;
+            write_http_response(&mut stream, resp_val, body_bytes.is_some()).await?;
+            let _ = stream.shutdown().await;
+            return Ok(());
+        }
+    }
+
+    // raw TCP: pass socket through as-is
+    let sock = Value::Socket(Rc::new(tokio::sync::Mutex::new(stream)));
+    let mut rt = Runtime::new("<tcp>", vec![]);
+    let _ = handler.call(&mut rt, vec![sock]).await?;
+    Ok(())
+}
+
+async fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<(Value, Option<Vec<u8>>)> {
+    let mut buf = Vec::<u8>::new();
+    let mut tmp = [0u8; 2048];
+    let mut header_end = None;
+    while buf.len() < 64 * 1024 {
+        let n = stream.read(&mut tmp).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
+            header_end = Some(pos + 4);
+            break;
+        }
+    }
+    let header_end = header_end.ok_or_else(|| anyhow!("Invalid HTTP request (no header terminator)"))?;
+    let (head, mut rest) = buf.split_at(header_end);
+
+    let head_str = String::from_utf8_lossy(head);
+    let mut lines = head_str.split("\r\n").filter(|l| !l.is_empty());
+    let request_line = lines.next().ok_or_else(|| anyhow!("Missing request line"))?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().ok_or_else(|| anyhow!("Bad request line"))?.to_string();
+    let path = parts.next().ok_or_else(|| anyhow!("Bad request line"))?.to_string();
+
+    let mut headers = BTreeMap::new();
+    let mut content_length: usize = 0;
+    for line in lines {
+        if let Some((k, v)) = line.split_once(':') {
+            let key = k.trim().to_string();
+            let val = v.trim().to_string();
+            if key.eq_ignore_ascii_case("content-length") {
+                if let Ok(n) = val.parse::<usize>() {
+                    content_length = n;
+                }
+            }
+            headers.insert(key, Value::Str(val));
+        }
+    }
+
+    let mut body = Vec::<u8>::new();
+    body.extend_from_slice(rest);
+    while body.len() < content_length && body.len() < 8 * 1024 * 1024 {
+        let n = stream.read(&mut tmp).await?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&tmp[..n]);
+    }
+    body.truncate(content_length);
+    let body_str = String::from_utf8_lossy(&body).to_string();
+
+    let mut req = BTreeMap::new();
+    req.insert("method".to_string(), Value::Str(method));
+    req.insert("path".to_string(), Value::Str(path));
+    req.insert("headers".to_string(), Value::Object(headers));
+    req.insert("body".to_string(), Value::Str(body_str));
+
+    Ok((Value::Object(req), if content_length > 0 { Some(body) } else { None }))
+}
+
+async fn write_http_response(stream: &mut TcpStream, resp: Value, _had_body: bool) -> anyhow::Result<()> {
+    let mut status: i64 = 200;
+    let mut body = String::new();
+    let mut extra_headers: BTreeMap<String, String> = BTreeMap::new();
+
+    match resp {
+        Value::Object(o) => {
+            if let Some(Value::Int(s)) = o.get("status") {
+                status = *s;
+            }
+            if let Some(v) = o.get("body") {
+                body = v.as_string();
+            }
+            if let Some(Value::Object(h)) = o.get("headers") {
+                for (k, v) in h.iter() {
+                    extra_headers.insert(k.clone(), v.as_string());
+                }
+            }
+        }
+        other => {
+            body = other.as_string();
+        }
+    }
+
+    let reason = match status {
+        200 => "OK",
+        201 => "Created",
+        400 => "Bad Request",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+    let body_bytes = body.as_bytes();
+    let mut resp_head = String::new();
+    resp_head.push_str(&format!("HTTP/1.1 {status} {reason}\r\n"));
+    resp_head.push_str("Connection: close\r\n");
+    if !extra_headers.contains_key("Content-Type") {
+        resp_head.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    }
+    resp_head.push_str(&format!("Content-Length: {}\r\n", body_bytes.len()));
+    for (k, v) in extra_headers {
+        resp_head.push_str(&format!("{k}: {v}\r\n"));
+    }
+    resp_head.push_str("\r\n");
+
+    stream.write_all(resp_head.as_bytes()).await?;
+    stream.write_all(body_bytes).await?;
+    Ok(())
+}
+
+fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 async fn b_holla(args: Vec<Value>) -> anyhow::Result<Value> {
@@ -967,5 +1166,86 @@ async fn b_dip(args: Vec<Value>) -> anyhow::Result<Value> {
     let mut s = sock.lock().await;
     s.shutdown().await?;
     Ok(Value::Null)
+}
+
+async fn b_len(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Len(x)");
+    }
+    let n = match &args[0] {
+        Value::Str(s) => s.chars().count(),
+        Value::Array(a) => a.len(),
+        Value::Object(o) => o.len(),
+        Value::HashMap(h) => h.borrow().len(),
+        _ => 0,
+    } as i64;
+    Ok(Value::Int(n))
+}
+
+async fn b_trim(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Trim(text)");
+    }
+    Ok(Value::Str(args[0].as_string().trim().to_string()))
+}
+
+async fn b_pick(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Pick(array)");
+    }
+    match &args[0] {
+        Value::Array(a) => {
+            if a.is_empty() {
+                return Ok(Value::Null);
+            }
+            let mut rng = rand::thread_rng();
+            let idx = rng.gen_range(0..a.len());
+            Ok(a[idx].clone())
+        }
+        _ => bail!("Pick expects an array"),
+    }
+}
+
+async fn b_hashmap(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        bail!("HashMap() takes no args");
+    }
+    Ok(Value::HashMap(Rc::new(RefCell::new(HashMap::new()))))
+}
+
+async fn b_hget(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("HGet(map, key)");
+    }
+    let key = args[1].as_string();
+    match &args[0] {
+        Value::HashMap(h) => Ok(h.borrow().get(&key).cloned().unwrap_or(Value::Null)),
+        _ => bail!("HGet expects HashMap"),
+    }
+}
+
+async fn b_hset(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 3 {
+        bail!("HSet(map, key, value)");
+    }
+    let key = args[1].as_string();
+    match &args[0] {
+        Value::HashMap(h) => {
+            h.borrow_mut().insert(key, args[2].clone());
+            Ok(Value::Null)
+        }
+        _ => bail!("HSet expects HashMap"),
+    }
+}
+
+async fn b_hdel(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 2 {
+        bail!("HDel(map, key)");
+    }
+    let key = args[1].as_string();
+    match &args[0] {
+        Value::HashMap(h) => Ok(Value::Bool(h.borrow_mut().remove(&key).is_some())),
+        _ => bail!("HDel expects HashMap"),
+    }
 }
 

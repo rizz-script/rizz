@@ -1,0 +1,46 @@
+Yoo PORT = 6379
+
+// In-memory store (HashMap datatype)
+Yoo STORE = HashMap()
+
+Bruh handleClient(sock) HawkTuah {
+  Ayo msg = Trim(Peek(sock))
+  Ayo parts = Split(msg, r"\s+")
+
+  Maybe Len(parts) == 0 {
+    Whisper(sock, "ERR empty command\n")
+    Dip(sock)
+    Rizz(null)
+  }
+
+  Ayo cmd = parts[0]
+
+  Maybe cmd == "GET" && Len(parts) >= 2 {
+    Ayo key = parts[1]
+    Ayo val = HGet(STORE, key)
+    Whisper(sock, Encode(val) + "\n")
+  } Unless Maybe cmd == "SET" && Len(parts) >= 3 {
+    Ayo key = parts[1]
+    Ayo value = parts[2]
+    HSet(STORE, key, value)
+    Whisper(sock, "OK\n")
+  } Unless Maybe cmd == "DEL" && Len(parts) >= 2 {
+    Ayo key = parts[1]
+    Ayo ok = HDel(STORE, key)
+    Whisper(sock, Maybe ok ? "1\n" : "0\n")
+  } Unless {
+    Whisper(sock, "ERR unknown command\n")
+  }
+
+  Dip(sock)
+  Rizz(null)
+}
+
+Bruh main() HawkTuah {
+  Rizz("Redis-ish TCP server on " + PORT)
+  Ayo server = Listen(PORT, handleClient)
+  Chill(server)
+}
+
+Vibe main()
+

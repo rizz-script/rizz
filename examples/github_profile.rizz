@@ -1,0 +1,31 @@
+Bruh main() HawkTuah {
+  Maybe Len(ARGS) < 1 {
+    Rizz("usage: rizz run examples/github_profile.rizz <username>")
+    Rizz(null)
+  }
+
+  Ayo username = ARGS[0]
+  Ayo url = "https://api.github.com/users/" + username
+  Ayo headers = {
+    "User-Agent": "rizzscript",
+    "Accept": "application/vnd.github+json"
+  }
+
+  Attempt {
+    Ayo resp = Spit(url, headers)
+    Ayo data = Decode(resp.body)
+
+    Rizz("login: " + data.login)
+    Rizz("name: " + data.name)
+    Rizz("public_repos: " + data.public_repos)
+    Rizz("followers: " + data.followers)
+    Rizz("following: " + data.following)
+    Rizz("url: " + data.html_url)
+    Rizz("bio: " + data.bio)
+  } Eww (err) {
+    Rizz("error: " + err)
+  }
+}
+
+Vibe main()
+
