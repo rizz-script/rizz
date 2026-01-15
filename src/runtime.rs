@@ -199,6 +199,8 @@ enum BuiltinKind {
     FsAppendFile,
     FsExists,
     FsRm,
+    ProcCwd,
+    ProcEnv,
 }
 
 struct Builtin {
@@ -244,6 +246,8 @@ impl Callable for Builtin {
             BuiltinKind::FsAppendFile => b_fs_append(args).await,
             BuiltinKind::FsExists => b_fs_exists(args).await,
             BuiltinKind::FsRm => b_fs_rm(args).await,
+            BuiltinKind::ProcCwd => b_proc_cwd(args).await,
+            BuiltinKind::ProcEnv => b_proc_env(args).await,
         }
     }
 }
@@ -373,6 +377,7 @@ impl Runtime {
         // JS-ish namespaces
         self.globals.define("Shell", self._shell_object(), true);
         self.globals.define("FS", self._fs_object(), true);
+        self.globals.define("Process", self._process_object(), true);
     }
 
     fn _shell_object(&self) -> Value {
@@ -416,6 +421,23 @@ impl Runtime {
             "rm".to_string(),
             Value::Function(Rc::new(Builtin {
                 kind: BuiltinKind::FsRm,
+            })),
+        );
+        Value::Object(o)
+    }
+
+    fn _process_object(&self) -> Value {
+        let mut o = BTreeMap::new();
+        o.insert(
+            "cwd".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::ProcCwd,
+            })),
+        );
+        o.insert(
+            "env".to_string(),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::ProcEnv,
             })),
         );
         Value::Object(o)
@@ -1538,5 +1560,23 @@ fn exported_name(s: &Stmt) -> Option<String> {
         Stmt::FuncDef { name, .. } => Some(name.clone()),
         _ => None,
     }
+}
+
+async fn b_proc_cwd(args: Vec<Value>) -> anyhow::Result<Value> {
+    if !args.is_empty() {
+        bail!("Process.cwd()");
+    }
+    Ok(Value::Str(std::env::current_dir()?.to_string_lossy().to_string()))
+}
+
+async fn b_proc_env(args: Vec<Value>) -> anyhow::Result<Value> {
+    if args.len() != 1 {
+        bail!("Process.env(name)");
+    }
+    let name = args[0].as_string();
+    Ok(match std::env::var(name) {
+        Ok(v) => Value::Str(v),
+        Err(_) => Value::Null,
+    })
 }
 
