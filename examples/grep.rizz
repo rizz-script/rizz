@@ -1,0 +1,25 @@
+Bruh main() HawkTuah {
+  Maybe Len(ARGS) < 2 {
+    Rizz("usage: rizz run examples/grep.rizz <file> <pattern>")
+    Rizz(null)
+  }
+
+  Ayo file = ARGS[0]
+  Ayo pattern = ARGS[1]
+  Ayo content = Snag(file)
+  Ayo lines = Split(content, r"\n")
+
+  // highlight matches in red using ANSI escapes
+  Yoo RED = "\u001b[31m"
+  Yoo RESET = "\u001b[0m"
+
+  Crazy line in lines {
+    Maybe Matches(line, pattern) {
+      Ayo hl = Swap(line, pattern, RED + "$0" + RESET)
+      Rizz(hl)
+    }
+  }
+}
+
+Vibe main()
+
