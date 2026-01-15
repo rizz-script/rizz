@@ -1,6 +1,6 @@
 use anyhow::{bail, Context};
 
-use crate::ast::{self, Block, Expr, Lit, ObjKey, Program, Span, Stmt};
+use crate::ast::{Block, Expr, Lit, ObjKey, Program, Span, Stmt};
 use crate::lexer::{lex, Kind, Token};
 
 #[derive(Debug)]
@@ -500,12 +500,15 @@ impl Parser {
             Kind::LBracket => {
                 self.advance();
                 let mut items = Vec::new();
+                self.skip_newlines();
                 if !self.at(Kind::RBracket) {
                     loop {
                         items.push(self.parse_expr(0, &[Kind::Comma, Kind::RBracket])?);
+                        self.skip_newlines();
                         if self.match_kind(Kind::Comma).is_none() {
                             break;
                         }
+                        self.skip_newlines();
                     }
                 }
                 self.expect(Kind::RBracket)?;
@@ -514,6 +517,7 @@ impl Parser {
             Kind::LBrace => {
                 self.advance();
                 let mut items = Vec::new();
+                self.skip_newlines();
                 if !self.at(Kind::RBrace) {
                     loop {
                         let key = if self.at(Kind::Ident) {
@@ -526,9 +530,11 @@ impl Parser {
                         self.expect(Kind::Colon)?;
                         let val = self.parse_expr(0, &[Kind::Comma, Kind::RBrace])?;
                         items.push((key, val));
+                        self.skip_newlines();
                         if self.match_kind(Kind::Comma).is_none() {
                             break;
                         }
+                        self.skip_newlines();
                     }
                 }
                 self.expect(Kind::RBrace)?;
