@@ -4,16 +4,14 @@ This repo contains a minimal interpreter for the **RizzScript** language describ
 
 ## Run
 
-If installed (recommended):
-
 ```bash
-python -m pip install -e .
-rizz run examples/hello.rizz
+cargo run -- run examples/hello.rizz
 ```
 
-Or without installing:
+Install a local `rizz` binary:
 
 ```bash
-python -m rizzscript run examples/hello.rizz
+cargo install --path .
+rizz run examples/hello.rizz
 ```
 
