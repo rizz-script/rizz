@@ -230,8 +230,9 @@ pub fn lex(src: &str) -> anyhow::Result<Vec<Token>> {
                             let hex = std::str::from_utf8(&bytes[i + 2..i + 6])?;
                             let cp = u32::from_str_radix(hex, 16)
                                 .map_err(|_| anyhow::anyhow!("Bad \\u escape at {line}:{col}"))?;
-                            let ch = char::from_u32(cp)
-                                .ok_or_else(|| anyhow::anyhow!("Bad unicode codepoint at {line}:{col}"))?;
+                            let ch = char::from_u32(cp).ok_or_else(|| {
+                                anyhow::anyhow!("Bad unicode codepoint at {line}:{col}")
+                            })?;
                             s.push(ch);
                             i += 6;
                             col += 6;
@@ -303,7 +304,8 @@ pub fn lex(src: &str) -> anyhow::Result<Vec<Token>> {
         }
 
         // number
-        if ch.is_ascii_digit() || (ch == '-' && i + 1 < bytes.len() && (bytes[i + 1] as char).is_ascii_digit())
+        if ch.is_ascii_digit()
+            || (ch == '-' && i + 1 < bytes.len() && (bytes[i + 1] as char).is_ascii_digit())
         {
             let start_line = line;
             let start_col = col;
@@ -326,7 +328,12 @@ pub fn lex(src: &str) -> anyhow::Result<Vec<Token>> {
                 }
             }
             let s = std::str::from_utf8(&bytes[i..j])?.to_string();
-            push(if is_float { Kind::Float } else { Kind::Int }, s, start_line, start_col);
+            push(
+                if is_float { Kind::Float } else { Kind::Int },
+                s,
+                start_line,
+                start_col,
+            );
             col += j - i;
             i = j;
             continue;
@@ -416,4 +423,3 @@ pub fn lex(src: &str) -> anyhow::Result<Vec<Token>> {
     push(Kind::Eof, "".to_string(), line, col);
     Ok(out)
 }
-

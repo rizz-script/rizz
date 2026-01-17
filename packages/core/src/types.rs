@@ -14,8 +14,11 @@ pub enum TypeId {
     Regex,
     HashMap,
     Function,
+    #[cfg(feature = "sys")]
     Task,
+    #[cfg(feature = "sys")]
     Socket,
+    #[cfg(feature = "sys")]
     Server,
     Error,
 }
@@ -34,8 +37,11 @@ pub fn parse_type(name: &str) -> TypeId {
         "regex" => TypeId::Regex,
         "hashmap" => TypeId::HashMap,
         "function" => TypeId::Function,
+        #[cfg(feature = "sys")]
         "task" => TypeId::Task,
+        #[cfg(feature = "sys")]
         "socket" => TypeId::Socket,
+        #[cfg(feature = "sys")]
         "server" => TypeId::Server,
         "Error" | "error" => TypeId::Error,
         _ => TypeId::Any,
@@ -54,8 +60,11 @@ pub fn value_type(v: &Value) -> TypeId {
         Value::Regex(_) => TypeId::Regex,
         Value::HashMap(_) => TypeId::HashMap,
         Value::Function(_) => TypeId::Function,
+        #[cfg(feature = "sys")]
         Value::Task(_) => TypeId::Task,
+        #[cfg(feature = "sys")]
         Value::Socket(_) => TypeId::Socket,
+        #[cfg(feature = "sys")]
         Value::Server(_) => TypeId::Server,
     }
 }
@@ -68,11 +77,10 @@ pub fn is_assignable(to: &TypeId, from: &TypeId) -> bool {
         return true;
     }
     // allow int -> float/number, float -> number
-    match (to, from) {
-        (TypeId::Float, TypeId::Int) => true,
-        (TypeId::Number, TypeId::Int) => true,
-        (TypeId::Number, TypeId::Float) => true,
-        _ => false,
-    }
+    matches!(
+        (to, from),
+        (TypeId::Float, TypeId::Int)
+            | (TypeId::Number, TypeId::Int)
+            | (TypeId::Number, TypeId::Float)
+    )
 }
-

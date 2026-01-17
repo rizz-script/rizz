@@ -11,7 +11,7 @@ name = "rizz"
 path = "src/main.rs"
 
 [dependencies]
-rizz-core = { path = "../../packages/core" }
+rizz-core = { path = "../../packages/core", features = ["sys"] }
 anyhow = "1.0.86"
 clap = { version = "4.5.27", features = ["derive"] }
 tokio = { version = "1.43.0", features = ["macros", "rt", "rt-multi-thread", "fs", "process", "io-util"] }

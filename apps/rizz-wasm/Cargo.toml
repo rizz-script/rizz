@@ -1,0 +1,36 @@
+[package]
+name = "rizz-wasm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Use WASM mode - no tokio dependencies
+rizz-core = { path = "../../packages/core", default-features = false }
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "console",
+]
+
+# Patch problematic dependencies for WASM
+[patch.crates-io]
+# Use wasm-compatible version of getrandom
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce number of codegen units to increase optimizations
+panic = "abort"     # Abort on panic
+strip = true        # Strip symbols from binary

@@ -53,12 +53,22 @@ fn tn(t: &TypeName) -> TypeId {
 
 fn check_stmt(s: &Stmt, env: &mut TypeEnv) -> anyhow::Result<()> {
     match s {
-        Stmt::VarDecl { name, ty, value, .. } | Stmt::ConstDecl { name, ty, value, .. } => {
+        Stmt::VarDecl {
+            name, ty, value, ..
+        }
+        | Stmt::ConstDecl {
+            name, ty, value, ..
+        } => {
             let inferred = infer_expr(value, env);
             if let Some(t) = ty {
                 let want = tn(t);
                 if !is_assignable(&want, &inferred) {
-                    anyhow::bail!("Type error: {} annotated as {:?} but assigned {:?}", name, want, inferred);
+                    anyhow::bail!(
+                        "Type error: {} annotated as {:?} but assigned {:?}",
+                        name,
+                        want,
+                        inferred
+                    );
                 }
                 env.set(name, want);
             } else {
@@ -69,11 +79,21 @@ fn check_stmt(s: &Stmt, env: &mut TypeEnv) -> anyhow::Result<()> {
             let rhs = infer_expr(value, env);
             if let Some(lhs) = env.get(name) {
                 if !is_assignable(&lhs, &rhs) {
-                    anyhow::bail!("Type error: assigning {:?} to {:?} variable {}", rhs, lhs, name);
+                    anyhow::bail!(
+                        "Type error: assigning {:?} to {:?} variable {}",
+                        rhs,
+                        lhs,
+                        name
+                    );
                 }
             }
         }
-        Stmt::FuncDef { name, params, ret_ty, .. } => {
+        Stmt::FuncDef {
+            name,
+            params,
+            ret_ty,
+            ..
+        } => {
             // store function type as "function" (no full signatures yet)
             env.set(name, TypeId::Function);
             env.push();
@@ -90,7 +110,13 @@ fn check_stmt(s: &Stmt, env: &mut TypeEnv) -> anyhow::Result<()> {
             }
             env.pop();
         }
-        Stmt::Try { try_block, catch_name, catch_block, finally_block, .. } => {
+        Stmt::Try {
+            try_block,
+            catch_name,
+            catch_block,
+            finally_block,
+            ..
+        } => {
             env.push();
             for st in &try_block.statements {
                 check_stmt(st, env)?;
@@ -139,9 +165,11 @@ fn infer_expr(e: &Expr, env: &mut TypeEnv) -> TypeId {
         Expr::Ternary { .. } => TypeId::Any,
         Expr::Member { .. } => TypeId::Any,
         Expr::Index { .. } => TypeId::Any,
+        #[cfg(feature = "sys")]
         Expr::Vibe { .. } => TypeId::Task,
+        #[cfg(not(feature = "sys"))]
+        Expr::Vibe { .. } => TypeId::Any, // Vibe not supported in WASM, return Any
         Expr::Attempt { .. } => TypeId::Any,
         Expr::Range { .. } => TypeId::Array,
     }
 }
-

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -49,8 +49,10 @@ async fn main() -> anyhow::Result<()> {
                         watch_and_restart(&file, &args, watch).await?;
                     } else {
                         let src = tokio::fs::read_to_string(&file).await?;
-                        let program =
-                            rizz_core::parser::parse_program(&src, file.to_string_lossy().as_ref())?;
+                        let program = rizz_core::parser::parse_program(
+                            &src,
+                            file.to_string_lossy().as_ref(),
+                        )?;
                         rizz_core::typecheck::typecheck(&program)?;
                         let mut rt =
                             rizz_core::runtime::Runtime::new(file.to_string_lossy().as_ref(), args);
@@ -87,7 +89,7 @@ Vibe main()
     Ok(())
 }
 
-fn cli_watch_spec(file: &PathBuf, watch: Option<String>) -> anyhow::Result<Option<Vec<String>>> {
+fn cli_watch_spec(file: &Path, watch: Option<String>) -> anyhow::Result<Option<Vec<String>>> {
     let Some(w) = watch else { return Ok(None) };
     if w == "__SELF__" {
         return Ok(Some(vec![file.to_string_lossy().to_string()]));
@@ -95,7 +97,11 @@ fn cli_watch_spec(file: &PathBuf, watch: Option<String>) -> anyhow::Result<Optio
     Ok(Some(vec![w]))
 }
 
-async fn watch_and_restart(file: &PathBuf, args: &[String], patterns: Vec<String>) -> anyhow::Result<()> {
+async fn watch_and_restart(
+    file: &PathBuf,
+    args: &[String],
+    patterns: Vec<String>,
+) -> anyhow::Result<()> {
     let bin = std::env::current_exe()?;
     let cwd = std::env::current_dir()?;
 
@@ -106,18 +112,22 @@ async fn watch_and_restart(file: &PathBuf, args: &[String], patterns: Vec<String
         let tx = tx.clone();
         let cwd2 = cwd.clone();
         move || {
-            let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(ev) = res {
-                    for p in ev.paths {
-                        let rel = p.strip_prefix(&cwd2).unwrap_or(&p);
-                        if matcher.is_match(rel) {
-                            let _ = tx.send(());
-                            break;
+            let mut watcher =
+                notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                    if let Ok(ev) = res {
+                        for p in ev.paths {
+                            let rel = p.strip_prefix(&cwd2).unwrap_or(&p);
+                            if matcher.is_match(rel) {
+                                let _ = tx.send(());
+                                break;
+                            }
                         }
                     }
-                }
-            }).expect("watcher");
-            watcher.watch(&cwd, RecursiveMode::Recursive).expect("watch");
+                })
+                .expect("watcher");
+            watcher
+                .watch(&cwd, RecursiveMode::Recursive)
+                .expect("watch");
             loop {
                 std::thread::sleep(Duration::from_secs(3600));
             }
@@ -197,4 +207,3 @@ fn format_paths(path: &PathBuf, check: bool) -> anyhow::Result<()> {
     }
     Ok(())
 }
-
