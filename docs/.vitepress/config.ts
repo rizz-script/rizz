@@ -11,6 +11,8 @@ export default defineConfig({
     ['link', { rel: 'icon', href: '/favicon.ico' }]
   ],
 
+  base: '/rizz/',
+
   markdown: {
     // Configure code block highlighting
     // Since Shiki doesn't have RizzScript, we'll use JavaScript as a fallback
