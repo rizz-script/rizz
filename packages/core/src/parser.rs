@@ -360,7 +360,10 @@ impl Parser {
         }
 
         // assignment: IDENT = expr
-        if self.at(Kind::Ident) && self.i + 1 < self.tokens.len() && self.tokens[self.i + 1].kind == Kind::Eq {
+        if self.at(Kind::Ident)
+            && self.i + 1 < self.tokens.len()
+            && self.tokens[self.i + 1].kind == Kind::Eq
+        {
             let name = self.advance();
             self.advance(); // '='
             let value = self.parse_expr(0, &[])?;
@@ -678,4 +681,3 @@ impl Parser {
         }))
     }
 }
-

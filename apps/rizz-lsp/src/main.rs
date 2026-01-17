@@ -25,9 +25,12 @@ impl Backend {
     async fn on_change(&self, params: TextDocumentItem) {
         let uri = params.uri.to_string();
         let text = params.text;
-        
+
         // Store document
-        self.document_map.write().await.insert(uri.clone(), text.clone());
+        self.document_map
+            .write()
+            .await
+            .insert(uri.clone(), text.clone());
         // Index symbols/types
         if let Ok(idx) = DocumentIndex::build(&uri, &text) {
             self.index_map
@@ -320,12 +323,21 @@ impl LanguageServer for Backend {
         Ok(None)
     }
 
-    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
-        let uri = params.text_document_position_params.text_document.uri.to_string();
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
         let position = params.text_document_position_params.position;
 
         let docs = self.document_map.read().await;
-        let Some(text) = docs.get(&uri) else { return Ok(None) };
+        let Some(text) = docs.get(&uri) else {
+            return Ok(None);
+        };
         let line = text.lines().nth(position.line as usize).unwrap_or("");
         let word = extract_word_at_position(line, position.character as usize);
         if word.is_empty() {
@@ -352,7 +364,9 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri.to_string();
         let position = params.text_document_position.position;
         let docs = self.document_map.read().await;
-        let Some(text) = docs.get(&uri) else { return Ok(None) };
+        let Some(text) = docs.get(&uri) else {
+            return Ok(None);
+        };
         let line = text.lines().nth(position.line as usize).unwrap_or("");
         let word = extract_word_at_position(line, position.character as usize);
         if word.is_empty() {
@@ -373,7 +387,9 @@ impl LanguageServer for Backend {
         let new_name = params.new_name;
 
         let docs = self.document_map.read().await;
-        let Some(text) = docs.get(&uri) else { return Ok(None) };
+        let Some(text) = docs.get(&uri) else {
+            return Ok(None);
+        };
         let line = text.lines().nth(position.line as usize).unwrap_or("");
         let word = extract_word_at_position(line, position.character as usize);
         if word.is_empty() {
@@ -397,10 +413,15 @@ impl LanguageServer for Backend {
         }))
     }
 
-    async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri.to_string();
         let idxs = self.index_map.read().await;
-        let Some(idx) = idxs.get(&uri) else { return Ok(None) };
+        let Some(idx) = idxs.get(&uri) else {
+            return Ok(None);
+        };
         Ok(Some(DocumentSymbolResponse::Nested(idx.document_symbols())))
     }
 }
@@ -510,18 +531,34 @@ impl DocumentIndex {
                         let (ty, _next) = parse_optional_type(&tokens, i + 2);
                         let inferred = infer_initializer_type(&tokens, i + 2);
                         let ty_s = ty.or(inferred).unwrap_or_else(|| "any".to_string());
-                        let kw = if matches!(k, Kind::Yoo | Kind::Const) { "const" } else { "let" };
-                        let rizz_kw = if matches!(k, Kind::Yoo | Kind::Const) { "Yoo" } else { "Ayo" };
-                        let kind_desc = if matches!(k, Kind::Yoo | Kind::Const) { "constant" } else { "variable" };
-                        
+                        let kw = if matches!(k, Kind::Yoo | Kind::Const) {
+                            "const"
+                        } else {
+                            "let"
+                        };
+                        let rizz_kw = if matches!(k, Kind::Yoo | Kind::Const) {
+                            "Yoo"
+                        } else {
+                            "Ayo"
+                        };
+                        let kind_desc = if matches!(k, Kind::Yoo | Kind::Const) {
+                            "constant"
+                        } else {
+                            "variable"
+                        };
+
                         let detail = format!(
                             "```rizz\n{} {}\n```\n**Type:** `{}`\n\n*({} {})*",
                             rizz_kw, name_tok.value, ty_s, kind_desc, kw
                         );
-                        
+
                         defs.push(SymbolDef {
                             name: name_tok.value.clone(),
-                            kind: if matches!(k, Kind::Yoo | Kind::Const) { SymbolKind::CONSTANT } else { SymbolKind::VARIABLE },
+                            kind: if matches!(k, Kind::Yoo | Kind::Const) {
+                                SymbolKind::CONSTANT
+                            } else {
+                                SymbolKind::VARIABLE
+                            },
                             selection_range: token_range(text, name_tok),
                             full_range: token_range(text, name_tok),
                             detail,
@@ -552,7 +589,12 @@ impl DocumentIndex {
             first_def.entry(d.name.clone()).or_insert(idx);
         }
 
-        Ok(Self { uri: uri_url, defs, first_def, occurrences })
+        Ok(Self {
+            uri: uri_url,
+            defs,
+            first_def,
+            occurrences,
+        })
     }
 
     fn definition_location(&self, name: &str, pos: Position) -> Option<Location> {
@@ -560,48 +602,61 @@ impl DocumentIndex {
         // Otherwise, find closest preceding definition
         let mut best: Option<&SymbolDef> = None;
         let mut best_distance = i64::MAX;
-        
+
         for d in self.defs.iter().filter(|d| d.name == name) {
             // Skip if cursor is already on the definition
             if pos_in_range(pos, d.selection_range) {
                 // Still return the location to allow navigation within the same file
-                return Some(Location { uri: self.uri.clone(), range: d.selection_range });
+                return Some(Location {
+                    uri: self.uri.clone(),
+                    range: d.selection_range,
+                });
             }
-            
+
             // Find closest preceding definition
-            if d.defined_at.line < pos.line || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character) {
-                let distance = ((pos.line as i64 - d.defined_at.line as i64) * 1000) + 
-                               (pos.character as i64 - d.defined_at.character as i64);
+            if d.defined_at.line < pos.line
+                || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character)
+            {
+                let distance = ((pos.line as i64 - d.defined_at.line as i64) * 1000)
+                    + (pos.character as i64 - d.defined_at.character as i64);
                 if distance < best_distance {
                     best_distance = distance;
                     best = Some(d);
                 }
             }
         }
-        best.map(|d| Location { uri: self.uri.clone(), range: d.selection_range })
+        best.map(|d| Location {
+            uri: self.uri.clone(),
+            range: d.selection_range,
+        })
     }
 
     fn any_definition_location(&self, name: &str) -> Option<Location> {
         let idx = *self.first_def.get(name)?;
         let d = &self.defs[idx];
-        Some(Location { uri: self.uri.clone(), range: d.selection_range })
+        Some(Location {
+            uri: self.uri.clone(),
+            range: d.selection_range,
+        })
     }
 
     fn hover_info(&self, name: &str, pos: Position) -> Option<String> {
         // If multiple defs exist, choose closest preceding or the one at current position
         let mut best: Option<&SymbolDef> = None;
         let mut best_distance = i64::MAX;
-        
+
         for d in self.defs.iter().filter(|d| d.name == name) {
             // Check if cursor is within the symbol's range (hovering on definition)
             if pos_in_range(pos, d.selection_range) {
                 return Some(d.detail.clone());
             }
-            
+
             // Otherwise, find closest preceding definition
-            if d.defined_at.line < pos.line || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character) {
-                let distance = ((pos.line as i64 - d.defined_at.line as i64) * 1000) + 
-                               (pos.character as i64 - d.defined_at.character as i64);
+            if d.defined_at.line < pos.line
+                || (d.defined_at.line == pos.line && d.defined_at.character <= pos.character)
+            {
+                let distance = ((pos.line as i64 - d.defined_at.line as i64) * 1000)
+                    + (pos.character as i64 - d.defined_at.character as i64);
                 if distance < best_distance {
                     best_distance = distance;
                     best = Some(d);
@@ -612,13 +667,18 @@ impl DocumentIndex {
     }
 
     fn find_references(&self, uri: &str, name: &str) -> Vec<Location> {
-        let Ok(url) = Url::parse(uri) else { return vec![] };
+        let Ok(url) = Url::parse(uri) else {
+            return vec![];
+        };
         self.occurrences
             .get(name)
             .into_iter()
             .flatten()
             .cloned()
-            .map(|range| Location { uri: url.clone(), range })
+            .map(|range| Location {
+                uri: url.clone(),
+                range,
+            })
             .collect()
     }
 
@@ -661,8 +721,10 @@ fn range_start(r: Range) -> Position {
 }
 
 fn pos_in_range(pos: Position, range: Range) -> bool {
-    (pos.line > range.start.line || (pos.line == range.start.line && pos.character >= range.start.character)) &&
-    (pos.line < range.end.line || (pos.line == range.end.line && pos.character <= range.end.character))
+    (pos.line > range.start.line
+        || (pos.line == range.start.line && pos.character >= range.start.character))
+        && (pos.line < range.end.line
+            || (pos.line == range.end.line && pos.character <= range.end.character))
 }
 
 fn parse_optional_type(tokens: &[Token], mut i: usize) -> (Option<String>, usize) {
@@ -702,7 +764,10 @@ fn infer_initializer_type(tokens: &[Token], mut i: usize) -> Option<String> {
 }
 
 fn parse_function_signature(tokens: &[Token], name_idx: usize) -> (String, usize) {
-    let name = tokens.get(name_idx).map(|t| t.value.clone()).unwrap_or_default();
+    let name = tokens
+        .get(name_idx)
+        .map(|t| t.value.clone())
+        .unwrap_or_default();
     // find '(' after name
     let mut i = name_idx + 1;
     while i < tokens.len() && tokens[i].kind != Kind::LParen {
@@ -740,15 +805,15 @@ fn parse_function_signature(tokens: &[Token], name_idx: usize) -> (String, usize
     }
     let (ret, i2) = parse_optional_type(tokens, i);
     let ret_s = ret.unwrap_or_else(|| "any".to_string());
-    
+
     // Format signature with return type prominently displayed
     let async_marker = if is_async { " HawkTuah" } else { "" };
-    let params_str = if params.is_empty() { 
-        String::new() 
-    } else { 
-        params.join(", ") 
+    let params_str = if params.is_empty() {
+        String::new()
+    } else {
+        params.join(", ")
     };
-    
+
     let sig = format!(
         "```rizz\nBruh {}({}){}\n```\n**Returns:** `{}`",
         name, params_str, async_marker, ret_s
@@ -761,6 +826,6 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(|client| Backend::new(client));
+    let (service, socket) = LspService::new(Backend::new);
     Server::new(stdin, stdout, socket).serve(service).await;
 }

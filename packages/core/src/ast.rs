@@ -33,7 +33,11 @@ pub enum Stmt {
         ty: Option<TypeName>,
         value: Expr,
     },
-    Assign { span: Span, name: String, value: Expr },
+    Assign {
+        span: Span,
+        name: String,
+        value: Expr,
+    },
     FuncDef {
         span: Span,
         name: String,
@@ -42,8 +46,14 @@ pub enum Stmt {
         ret_ty: Option<TypeName>,
         body: Block,
     },
-    Return { span: Span, value: Option<Expr> },
-    Throw { span: Span, value: Expr },
+    Return {
+        span: Span,
+        value: Option<Expr>,
+    },
+    Throw {
+        span: Span,
+        value: Expr,
+    },
     Try {
         span: Span,
         try_block: Block,
@@ -64,8 +74,14 @@ pub enum Stmt {
         span: Span,
         decl: Box<Stmt>,
     },
-    Rizz { span: Span, value: Expr },
-    Cringe { span: Span, value: Expr },
+    Rizz {
+        span: Span,
+        value: Expr,
+    },
+    Cringe {
+        span: Span,
+        value: Expr,
+    },
     IfChain {
         span: Span,
         cond: Expr,
@@ -79,8 +95,15 @@ pub enum Stmt {
         iterable: Expr,
         body: Block,
     },
-    WhileLoop { span: Span, cond: Expr, body: Block },
-    ExprStmt { span: Span, expr: Expr },
+    WhileLoop {
+        span: Span,
+        cond: Expr,
+        body: Block,
+    },
+    ExprStmt {
+        span: Span,
+        expr: Expr,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -98,9 +121,18 @@ pub struct Param {
 
 #[derive(Debug, Clone)]
 pub enum Expr {
-    Ident { span: Span, name: String },
-    Literal { span: Span, lit: Lit },
-    Array { span: Span, items: Vec<Expr> },
+    Ident {
+        span: Span,
+        name: String,
+    },
+    Literal {
+        span: Span,
+        lit: Lit,
+    },
+    Array {
+        span: Span,
+        items: Vec<Expr>,
+    },
     Object {
         span: Span,
         items: Vec<(ObjKey, Expr)>,
@@ -137,7 +169,10 @@ pub enum Expr {
         obj: Box<Expr>,
         index: Box<Expr>,
     },
-    Vibe { span: Span, expr: Box<Expr> },
+    Vibe {
+        span: Span,
+        expr: Box<Expr>,
+    },
     Attempt {
         span: Span,
         try_block: Block,
@@ -179,4 +214,3 @@ impl Span {
 }
 
 pub type Object = BTreeMap<String, serde_json::Value>;
-

@@ -36,7 +36,7 @@ Bruh main() HawkTuah {
   Rizz(count)
   
   // Cmd+click on 'fetchData' should go to its definition
-  Ayo data = Chill(Vibe fetchData("https://api.example.com"))
+  Ayo data = Chill(Vibe fetchData("https://api.github.com/users/octocat"))
   
   Rizz("Done!")
 }

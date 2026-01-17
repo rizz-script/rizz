@@ -8,13 +8,21 @@ use std::rc::Rc;
 use anyhow::{anyhow, bail};
 use rand::Rng;
 use regex::Regex;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinHandle;
-use tokio::process::Command;
 
-use crate::parser::parse_program;
+#[cfg(feature = "sys")]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(feature = "sys")]
+use tokio::net::{TcpListener, TcpStream};
+#[cfg(feature = "sys")]
+use tokio::process::Command;
+#[cfg(feature = "sys")]
+use tokio::task::JoinHandle;
+
+#[cfg(feature = "sys")]
+type TaskHandle = Rc<RefCell<Option<JoinHandle<anyhow::Result<Value>>>>>;
+
 use crate::ast::{Block, Expr, Lit, ObjKey, Program, Stmt};
+use crate::parser::parse_program;
 
 #[derive(Clone)]
 pub enum Value {
@@ -29,8 +37,11 @@ pub enum Value {
     HashMap(Rc<RefCell<HashMap<String, Value>>>),
 
     Function(Rc<dyn Callable>),
+    #[cfg(feature = "sys")]
     Task(Rc<RefCell<Option<JoinHandle<anyhow::Result<Value>>>>>),
+    #[cfg(feature = "sys")]
     Socket(Rc<tokio::sync::Mutex<TcpStream>>),
+    #[cfg(feature = "sys")]
     Server(Rc<RefCell<Option<JoinHandle<anyhow::Result<()>>>>>),
 }
 
@@ -47,8 +58,11 @@ impl fmt::Debug for Value {
             Value::Regex(p) => write!(f, "Regex({p:?})"),
             Value::HashMap(_) => write!(f, "HashMap(..)"),
             Value::Function(_) => write!(f, "Function(..)"),
+            #[cfg(feature = "sys")]
             Value::Task(_) => write!(f, "Task(..)"),
+            #[cfg(feature = "sys")]
             Value::Socket(_) => write!(f, "Socket(..)"),
+            #[cfg(feature = "sys")]
             Value::Server(_) => write!(f, "Server(..)"),
         }
     }
@@ -88,28 +102,21 @@ impl Value {
             Value::Regex(p) => format!("r\"{p}\""),
             Value::HashMap(_) => "<hashmap>".to_string(),
             Value::Function(_) => "<function>".to_string(),
+            #[cfg(feature = "sys")]
             Value::Task(_) => "<task>".to_string(),
+            #[cfg(feature = "sys")]
             Value::Socket(_) => "<socket>".to_string(),
+            #[cfg(feature = "sys")]
             Value::Server(_) => "<server>".to_string(),
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Scope {
     values: BTreeMap<String, Value>,
     consts: BTreeMap<String, bool>,
     types: BTreeMap<String, crate::types::TypeId>,
-}
-
-impl Default for Scope {
-    fn default() -> Self {
-        Self {
-            values: BTreeMap::new(),
-            consts: BTreeMap::new(),
-            types: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -206,27 +213,13 @@ pub trait Callable {
 
 #[derive(Copy, Clone)]
 enum BuiltinKind {
-    Chill,
-    Spit,
-    Yeet,
-    Flex,
-    Ghost,
+    // Core builtins (available in both sys and wasm)
     Decode,
     Encode,
     Hunt,
     Swap,
     Matches,
     Split,
-    Snag,
-    Stash,
-    KeepAdding,
-    Trash,
-    FileExists,
-    Listen,
-    Holla,
-    Peek,
-    Whisper,
-    Dip,
     Len,
     Trim,
     Pick,
@@ -235,13 +228,52 @@ enum BuiltinKind {
     HSet,
     HDel,
     Error,
+    // Sys-only builtins (tokio-dependent)
+    #[cfg(feature = "sys")]
+    Chill,
+    #[cfg(feature = "sys")]
+    Spit,
+    #[cfg(feature = "sys")]
+    Yeet,
+    #[cfg(feature = "sys")]
+    Flex,
+    #[cfg(feature = "sys")]
+    Ghost,
+    #[cfg(feature = "sys")]
+    Snag,
+    #[cfg(feature = "sys")]
+    Stash,
+    #[cfg(feature = "sys")]
+    KeepAdding,
+    #[cfg(feature = "sys")]
+    Trash,
+    #[cfg(feature = "sys")]
+    FileExists,
+    #[cfg(feature = "sys")]
+    Listen,
+    #[cfg(feature = "sys")]
+    Holla,
+    #[cfg(feature = "sys")]
+    Peek,
+    #[cfg(feature = "sys")]
+    Whisper,
+    #[cfg(feature = "sys")]
+    Dip,
+    #[cfg(feature = "sys")]
     ShellRun,
+    #[cfg(feature = "sys")]
     FsReadFile,
+    #[cfg(feature = "sys")]
     FsWriteFile,
+    #[cfg(feature = "sys")]
     FsAppendFile,
+    #[cfg(feature = "sys")]
     FsExists,
+    #[cfg(feature = "sys")]
     FsRm,
+    #[cfg(feature = "sys")]
     ProcCwd,
+    #[cfg(feature = "sys")]
     ProcEnv,
 }
 
@@ -253,27 +285,13 @@ struct Builtin {
 impl Callable for Builtin {
     async fn call(&self, rt: &mut Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
         match self.kind {
-            BuiltinKind::Chill => b_chill(args).await,
-            BuiltinKind::Spit => b_spit(rt, args).await,
-            BuiltinKind::Yeet => b_yeet(rt, args).await,
-            BuiltinKind::Flex => b_flex(rt, args).await,
-            BuiltinKind::Ghost => b_ghost(rt, args).await,
+            // Core builtins
             BuiltinKind::Decode => b_decode(args).await,
             BuiltinKind::Encode => b_encode(args).await,
             BuiltinKind::Hunt => b_hunt(args).await,
             BuiltinKind::Swap => b_swap(args).await,
             BuiltinKind::Matches => b_matches(args).await,
             BuiltinKind::Split => b_split(args).await,
-            BuiltinKind::Snag => b_snag(args).await,
-            BuiltinKind::Stash => b_stash(args).await,
-            BuiltinKind::KeepAdding => b_keepadding(args).await,
-            BuiltinKind::Trash => b_trash(args).await,
-            BuiltinKind::FileExists => b_fileexists(args).await,
-            BuiltinKind::Listen => b_listen(args).await,
-            BuiltinKind::Holla => b_holla(args).await,
-            BuiltinKind::Peek => b_peek(args).await,
-            BuiltinKind::Whisper => b_whisper(args).await,
-            BuiltinKind::Dip => b_dip(args).await,
             BuiltinKind::Len => b_len(args).await,
             BuiltinKind::Trim => b_trim(args).await,
             BuiltinKind::Pick => b_pick(args).await,
@@ -282,13 +300,52 @@ impl Callable for Builtin {
             BuiltinKind::HSet => b_hset(args).await,
             BuiltinKind::HDel => b_hdel(args).await,
             BuiltinKind::Error => b_error(args).await,
+            // Sys-only builtins (only available when sys feature is enabled)
+            #[cfg(feature = "sys")]
+            BuiltinKind::Chill => b_chill(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Spit => b_spit(rt, args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Yeet => b_yeet(rt, args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Flex => b_flex(rt, args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Ghost => b_ghost(rt, args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Snag => b_snag(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Stash => b_stash(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::KeepAdding => b_keepadding(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Trash => b_trash(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::FileExists => b_fileexists(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Listen => b_listen(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Holla => b_holla(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Peek => b_peek(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Whisper => b_whisper(args).await,
+            #[cfg(feature = "sys")]
+            BuiltinKind::Dip => b_dip(args).await,
+            #[cfg(feature = "sys")]
             BuiltinKind::ShellRun => b_shell_run(args).await,
+            #[cfg(feature = "sys")]
             BuiltinKind::FsReadFile => b_fs_read(args).await,
+            #[cfg(feature = "sys")]
             BuiltinKind::FsWriteFile => b_fs_write(args).await,
+            #[cfg(feature = "sys")]
             BuiltinKind::FsAppendFile => b_fs_append(args).await,
+            #[cfg(feature = "sys")]
             BuiltinKind::FsExists => b_fs_exists(args).await,
+            #[cfg(feature = "sys")]
             BuiltinKind::FsRm => b_fs_rm(args).await,
+            #[cfg(feature = "sys")]
             BuiltinKind::ProcCwd => b_proc_cwd(args).await,
+            #[cfg(feature = "sys")]
             BuiltinKind::ProcEnv => b_proc_env(args).await,
         }
     }
@@ -333,8 +390,10 @@ struct Frame {
 pub struct Runtime {
     filename: String,
     globals: Env,
+    #[cfg(feature = "sys")]
     client: reqwest::Client,
-    tasks: Vec<Rc<RefCell<Option<JoinHandle<anyhow::Result<Value>>>>>>,
+    #[cfg(feature = "sys")]
+    tasks: Vec<TaskHandle>,
     module_cache: Rc<RefCell<HashMap<String, Value>>>,
     current_exports: Option<Rc<RefCell<BTreeMap<String, Value>>>>,
 }
@@ -353,7 +412,9 @@ impl Runtime {
         let mut rt = Self {
             filename: filename.to_string(),
             globals: Env::default(),
+            #[cfg(feature = "sys")]
             client: reqwest::Client::new(),
+            #[cfg(feature = "sys")]
             tasks: Vec::new(),
             module_cache,
             current_exports: None,
@@ -369,59 +430,222 @@ impl Runtime {
     }
 
     fn install_builtins(&mut self) {
-        self.globals.define("Chill", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Chill })), true);
-        self.globals.define("Spit", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Spit })), true);
-        self.globals.define("Yeet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Yeet })), true);
-        self.globals.define("Flex", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Flex })), true);
-        self.globals.define("Ghost", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Ghost })), true);
-        self.globals.define("Decode", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Decode })), true);
-        self.globals.define("Encode", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Encode })), true);
-        self.globals.define("Hunt", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Hunt })), true);
-        self.globals.define("Swap", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Swap })), true);
-        self.globals.define("Matches", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Matches })), true);
-        self.globals.define("Split", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Split })), true);
-        self.globals.define("Snag", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Snag })), true);
-        self.globals.define("Stash", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Stash })), true);
+        // Core builtins (available in both sys and wasm)
         self.globals.define(
-            "KeepAdding",
-            Value::Function(Rc::new(Builtin { kind: BuiltinKind::KeepAdding })),
+            "Decode",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Decode,
+            })),
             true,
         );
-        self.globals.define("Trash", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Trash })), true);
         self.globals.define(
-            "FileExists",
-            Value::Function(Rc::new(Builtin { kind: BuiltinKind::FileExists })),
+            "Encode",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Encode,
+            })),
             true,
         );
-        self.globals.define("Listen", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Listen })), true);
-        self.globals.define("Holla", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Holla })), true);
-        self.globals.define("Peek", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Peek })), true);
         self.globals.define(
-            "Whisper",
-            Value::Function(Rc::new(Builtin { kind: BuiltinKind::Whisper })),
+            "Hunt",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Hunt,
+            })),
             true,
         );
-        self.globals.define("Dip", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Dip })), true);
-
-        self.globals.define("Len", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Len })), true);
-        self.globals.define("Trim", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Trim })), true);
-        self.globals.define("Pick", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Pick })), true);
+        self.globals.define(
+            "Swap",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Swap,
+            })),
+            true,
+        );
+        self.globals.define(
+            "Matches",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Matches,
+            })),
+            true,
+        );
+        self.globals.define(
+            "Split",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Split,
+            })),
+            true,
+        );
+        self.globals.define(
+            "Len",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Len,
+            })),
+            true,
+        );
+        self.globals.define(
+            "Trim",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Trim,
+            })),
+            true,
+        );
+        self.globals.define(
+            "Pick",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Pick,
+            })),
+            true,
+        );
         self.globals.define(
             "HashMap",
-            Value::Function(Rc::new(Builtin { kind: BuiltinKind::HashMap })),
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::HashMap,
+            })),
             true,
         );
-        self.globals.define("HGet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HGet })), true);
-        self.globals.define("HSet", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HSet })), true);
-        self.globals.define("HDel", Value::Function(Rc::new(Builtin { kind: BuiltinKind::HDel })), true);
-        self.globals.define("Error", Value::Function(Rc::new(Builtin { kind: BuiltinKind::Error })), true);
+        self.globals.define(
+            "HGet",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::HGet,
+            })),
+            true,
+        );
+        self.globals.define(
+            "HSet",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::HSet,
+            })),
+            true,
+        );
+        self.globals.define(
+            "HDel",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::HDel,
+            })),
+            true,
+        );
+        self.globals.define(
+            "Error",
+            Value::Function(Rc::new(Builtin {
+                kind: BuiltinKind::Error,
+            })),
+            true,
+        );
 
-        // JS-ish namespaces
-        self.globals.define("Shell", self._shell_object(), true);
-        self.globals.define("FS", self._fs_object(), true);
-        self.globals.define("Process", self._process_object(), true);
+        // Sys-only builtins (tokio-dependent)
+        #[cfg(feature = "sys")]
+        {
+            self.globals.define(
+                "Chill",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Chill,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Spit",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Spit,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Yeet",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Yeet,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Flex",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Flex,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Ghost",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Ghost,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Snag",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Snag,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Stash",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Stash,
+                })),
+                true,
+            );
+            self.globals.define(
+                "KeepAdding",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::KeepAdding,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Trash",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Trash,
+                })),
+                true,
+            );
+            self.globals.define(
+                "FileExists",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::FileExists,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Listen",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Listen,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Holla",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Holla,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Peek",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Peek,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Whisper",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Whisper,
+                })),
+                true,
+            );
+            self.globals.define(
+                "Dip",
+                Value::Function(Rc::new(Builtin {
+                    kind: BuiltinKind::Dip,
+                })),
+                true,
+            );
+            // JS-ish namespaces
+            self.globals.define("Shell", self._shell_object(), true);
+            self.globals.define("FS", self._fs_object(), true);
+            self.globals.define("Process", self._process_object(), true);
+        }
     }
 
+    #[cfg(feature = "sys")]
     fn _shell_object(&self) -> Value {
         let mut o = BTreeMap::new();
         o.insert(
@@ -433,6 +657,7 @@ impl Runtime {
         Value::Object(o)
     }
 
+    #[cfg(feature = "sys")]
     fn _fs_object(&self) -> Value {
         let mut o = BTreeMap::new();
         o.insert(
@@ -468,6 +693,7 @@ impl Runtime {
         Value::Object(o)
     }
 
+    #[cfg(feature = "sys")]
     fn _process_object(&self) -> Value {
         let mut o = BTreeMap::new();
         o.insert(
@@ -495,15 +721,20 @@ impl Runtime {
             }
         }
         // Await any "fire-and-forget" tasks spawned by `Vibe` that weren't `Chill`'d.
-        for t in self.tasks.iter() {
-            if let Some(handle) = t.borrow_mut().take() {
-                let _ = handle.await??;
+        #[cfg(feature = "sys")]
+        {
+            for t in self.tasks.iter() {
+                let handle = t.borrow_mut().take();
+                if let Some(handle) = handle {
+                    let _ = handle.await??;
+                }
             }
         }
         self.globals = globals;
         Ok(())
     }
 
+    #[cfg(feature = "sys")]
     async fn load_module(&mut self, spec: &str) -> anyhow::Result<Value> {
         let base = self.base_dir();
         let mut path = PathBuf::from(spec);
@@ -531,6 +762,11 @@ impl Runtime {
         Ok(out)
     }
 
+    #[cfg(not(feature = "sys"))]
+    async fn load_module(&mut self, _spec: &str) -> anyhow::Result<Value> {
+        bail!("Module loading not supported in WASM mode")
+    }
+
     fn base_dir(&self) -> PathBuf {
         if self.filename.starts_with('<') {
             return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -542,7 +778,12 @@ impl Runtime {
     }
 
     #[async_recursion::async_recursion(?Send)]
-    async fn exec_block(&mut self, block: &Block, env: &mut Env, frame: &mut Frame) -> anyhow::Result<()> {
+    async fn exec_block(
+        &mut self,
+        block: &Block,
+        env: &mut Env,
+        frame: &mut Frame,
+    ) -> anyhow::Result<()> {
         for s in &block.statements {
             self.exec_stmt(s, env, frame).await?;
             if frame.returning {
@@ -553,7 +794,12 @@ impl Runtime {
     }
 
     #[async_recursion::async_recursion(?Send)]
-    async fn exec_stmt(&mut self, s: &Stmt, env: &mut Env, frame: &mut Frame) -> anyhow::Result<()> {
+    async fn exec_stmt(
+        &mut self,
+        s: &Stmt,
+        env: &mut Env,
+        frame: &mut Frame,
+    ) -> anyhow::Result<()> {
         match s {
             Stmt::Import { name, path, .. } => {
                 let m = self.load_module(path).await?;
@@ -580,12 +826,16 @@ impl Runtime {
                     }
                 }
             }
-            Stmt::VarDecl { name, ty, value, .. } => {
+            Stmt::VarDecl {
+                name, ty, value, ..
+            } => {
                 let v = self.eval_expr(value, env, frame).await?;
                 let t = ty.as_ref().map(|tn| crate::types::parse_type(&tn.name));
                 env.define_typed(name, v, false, t)?;
             }
-            Stmt::ConstDecl { name, ty, value, .. } => {
+            Stmt::ConstDecl {
+                name, ty, value, ..
+            } => {
                 let v = self.eval_expr(value, env, frame).await?;
                 let t = ty.as_ref().map(|tn| crate::types::parse_type(&tn.name));
                 env.define_typed(name, v, true, t)?;
@@ -594,7 +844,9 @@ impl Runtime {
                 let v = self.eval_expr(value, env, frame).await?;
                 env.set(name, v)?;
             }
-            Stmt::FuncDef { name, params, body, .. } => {
+            Stmt::FuncDef {
+                name, params, body, ..
+            } => {
                 let f = UserFunction {
                     name: name.clone(),
                     params: params.iter().map(|p| p.name.clone()).collect(),
@@ -669,7 +921,13 @@ impl Runtime {
             Stmt::ExprStmt { expr, .. } => {
                 let _ = self.eval_expr(expr, env, frame).await?;
             }
-            Stmt::IfChain { cond, then_block, elifs, else_block, .. } => {
+            Stmt::IfChain {
+                cond,
+                then_block,
+                elifs,
+                else_block,
+                ..
+            } => {
                 if self.eval_expr(cond, env, frame).await?.truthy() {
                     env.push_scope();
                     let res = self.exec_block(then_block, env, frame).await;
@@ -697,7 +955,12 @@ impl Runtime {
                     }
                 }
             }
-            Stmt::ForIn { var, iterable, body, .. } => {
+            Stmt::ForIn {
+                var,
+                iterable,
+                body,
+                ..
+            } => {
                 let it = self.eval_expr(iterable, env, frame).await?;
                 let list = match it {
                     Value::Array(a) => a,
@@ -724,7 +987,12 @@ impl Runtime {
     }
 
     #[async_recursion::async_recursion(?Send)]
-    async fn eval_expr(&mut self, e: &Expr, env: &mut Env, frame: &mut Frame) -> anyhow::Result<Value> {
+    async fn eval_expr(
+        &mut self,
+        e: &Expr,
+        env: &mut Env,
+        frame: &mut Frame,
+    ) -> anyhow::Result<Value> {
         match e {
             Expr::Ident { name, .. } => env.get(name),
             Expr::Literal { lit, .. } => Ok(match lit {
@@ -766,7 +1034,9 @@ impl Runtime {
                     _ => bail!("Unknown unary op: {op}"),
                 }
             }
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let l = self.eval_expr(left, env, frame).await?;
                 let r = self.eval_expr(right, env, frame).await?;
                 binop(op, l, r)
@@ -792,7 +1062,12 @@ impl Runtime {
                 }
                 Ok(Value::Array(out))
             }
-            Expr::Ternary { cond, if_true, if_false, .. } => {
+            Expr::Ternary {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
                 if self.eval_expr(cond, env, frame).await?.truthy() {
                     self.eval_expr(if_true, env, frame).await
                 } else {
@@ -828,6 +1103,7 @@ impl Runtime {
                     _ => bail!("Cannot call non-function"),
                 }
             }
+            #[cfg(feature = "sys")]
             Expr::Vibe { expr, .. } => {
                 let mut snap = env.clone();
                 let e2 = (*expr.clone()).clone();
@@ -840,7 +1116,16 @@ impl Runtime {
                 self.tasks.push(cell.clone());
                 Ok(Value::Task(cell))
             }
-            Expr::Attempt { try_block, err_name, catch_block, .. } => {
+            #[cfg(not(feature = "sys"))]
+            Expr::Vibe { .. } => {
+                bail!("Vibe (async tasks) not supported in WASM mode")
+            }
+            Expr::Attempt {
+                try_block,
+                err_name,
+                catch_block,
+                ..
+            } => {
                 env.push_scope();
                 let res = self.exec_block(try_block, env, frame).await;
                 env.pop_scope();
@@ -943,7 +1228,13 @@ fn cmp_num(a: &Value, b: &Value) -> anyhow::Result<i32> {
         Value::Float(f) => *f,
         _ => bail!("Comparison expects numbers"),
     };
-    Ok(if af < bf { -1 } else if af > bf { 1 } else { 0 })
+    Ok(if af < bf {
+        -1
+    } else if af > bf {
+        1
+    } else {
+        0
+    })
 }
 
 fn to_json(v: &Value) -> anyhow::Result<serde_json::Value> {
@@ -955,11 +1246,9 @@ fn to_json(v: &Value) -> anyhow::Result<serde_json::Value> {
             serde_json::Number::from_f64(*f).ok_or_else(|| anyhow!("bad float"))?,
         ),
         Value::Str(s) => serde_json::Value::String(s.clone()),
-        Value::Array(a) => serde_json::Value::Array(
-            a.iter()
-                .map(|x| to_json(x))
-                .collect::<Result<Vec<_>, _>>()?,
-        ),
+        Value::Array(a) => {
+            serde_json::Value::Array(a.iter().map(to_json).collect::<Result<Vec<_>, _>>()?)
+        }
         Value::Object(o) => {
             let mut map = serde_json::Map::new();
             for (k, v) in o.iter() {
@@ -1014,6 +1303,7 @@ fn regex_pat(v: &Value) -> String {
 
 // --- builtins ---
 
+#[cfg(feature = "sys")]
 async fn b_chill(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("Chill(task) expects 1 arg");
@@ -1038,7 +1328,14 @@ async fn b_chill(args: Vec<Value>) -> anyhow::Result<Value> {
     }
 }
 
-async fn http_req(rt: &Runtime, method: &str, url: &str, data: Option<Value>, headers: Option<Value>) -> anyhow::Result<Value> {
+#[cfg(feature = "sys")]
+async fn http_req(
+    rt: &Runtime,
+    method: &str,
+    url: &str,
+    data: Option<Value>,
+    headers: Option<Value>,
+) -> anyhow::Result<Value> {
     let mut req = rt.client.request(method.parse()?, url);
     if let Some(Value::Object(h)) = headers {
         for (k, v) in h {
@@ -1063,6 +1360,7 @@ async fn http_req(rt: &Runtime, method: &str, url: &str, data: Option<Value>, he
     Ok(Value::Object(out))
 }
 
+#[cfg(feature = "sys")]
 async fn b_spit(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
     if !(1..=2).contains(&args.len()) {
         bail!("Spit(url, headers?)");
@@ -1072,6 +1370,7 @@ async fn b_spit(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
     http_req(rt, "GET", &url, None, headers).await
 }
 
+#[cfg(feature = "sys")]
 async fn b_yeet(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
     if !(2..=3).contains(&args.len()) {
         bail!("Yeet(url, data, headers?)");
@@ -1082,6 +1381,7 @@ async fn b_yeet(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
     http_req(rt, "POST", &url, Some(data), headers).await
 }
 
+#[cfg(feature = "sys")]
 async fn b_flex(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
     if !(2..=3).contains(&args.len()) {
         bail!("Flex(url, data, headers?)");
@@ -1092,6 +1392,7 @@ async fn b_flex(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
     http_req(rt, "PUT", &url, Some(data), headers).await
 }
 
+#[cfg(feature = "sys")]
 async fn b_ghost(rt: &Runtime, args: Vec<Value>) -> anyhow::Result<Value> {
     if !(1..=2).contains(&args.len()) {
         bail!("Ghost(url, headers?)");
@@ -1176,13 +1477,17 @@ async fn b_split(args: Vec<Value>) -> anyhow::Result<Value> {
     ))
 }
 
+#[cfg(feature = "sys")]
 async fn b_snag(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("Snag(path)");
     }
-    Ok(Value::Str(tokio::fs::read_to_string(args[0].as_string()).await?))
+    Ok(Value::Str(
+        tokio::fs::read_to_string(args[0].as_string()).await?,
+    ))
 }
 
+#[cfg(feature = "sys")]
 async fn b_stash(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
         bail!("Stash(path, text)");
@@ -1191,6 +1496,7 @@ async fn b_stash(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(feature = "sys")]
 async fn b_keepadding(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
         bail!("KeepAdding(path, text)");
@@ -1204,6 +1510,7 @@ async fn b_keepadding(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(feature = "sys")]
 async fn b_trash(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("Trash(path)");
@@ -1212,13 +1519,17 @@ async fn b_trash(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(feature = "sys")]
 async fn b_fileexists(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("FileExists(path)");
     }
-    Ok(Value::Bool(tokio::fs::try_exists(args[0].as_string()).await?))
+    Ok(Value::Bool(
+        tokio::fs::try_exists(args[0].as_string()).await?,
+    ))
 }
 
+#[cfg(feature = "sys")]
 async fn b_listen(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
         bail!("Listen(port, handler)");
@@ -1243,25 +1554,28 @@ async fn b_listen(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Server(Rc::new(RefCell::new(Some(handle)))))
 }
 
-async fn handle_incoming_connection(mut stream: TcpStream, handler: Rc<dyn Callable>) -> anyhow::Result<()> {
+#[cfg(feature = "sys")]
+async fn handle_incoming_connection(
+    mut stream: TcpStream,
+    handler: Rc<dyn Callable>,
+) -> anyhow::Result<()> {
     let mut peek_buf = [0u8; 1024];
     let n = stream.peek(&mut peek_buf).await?;
     let s = String::from_utf8_lossy(&peek_buf[..n]);
 
-    if s.starts_with("GET ")
+    if (s.starts_with("GET ")
         || s.starts_with("POST ")
         || s.starts_with("PUT ")
         || s.starts_with("DELETE ")
-        || s.starts_with("PATCH ")
+        || s.starts_with("PATCH "))
+        && s.contains("HTTP/")
     {
-        if s.contains("HTTP/") {
-            let (req, body_bytes) = read_http_request(&mut stream).await?;
-            let mut rt = Runtime::new("<http>", vec![]);
-            let resp_val = handler.call(&mut rt, vec![req]).await?;
-            write_http_response(&mut stream, resp_val, body_bytes.is_some()).await?;
-            let _ = stream.shutdown().await;
-            return Ok(());
-        }
+        let (req, body_bytes) = read_http_request(&mut stream).await?;
+        let mut rt = Runtime::new("<http>", vec![]);
+        let resp_val = handler.call(&mut rt, vec![req]).await?;
+        write_http_response(&mut stream, resp_val, body_bytes.is_some()).await?;
+        let _ = stream.shutdown().await;
+        return Ok(());
     }
 
     // raw TCP: pass socket through as-is
@@ -1271,6 +1585,7 @@ async fn handle_incoming_connection(mut stream: TcpStream, handler: Rc<dyn Calla
     Ok(())
 }
 
+#[cfg(feature = "sys")]
 async fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<(Value, Option<Vec<u8>>)> {
     let mut buf = Vec::<u8>::new();
     let mut tmp = [0u8; 2048];
@@ -1286,15 +1601,24 @@ async fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<(Value, Opt
             break;
         }
     }
-    let header_end = header_end.ok_or_else(|| anyhow!("Invalid HTTP request (no header terminator)"))?;
+    let header_end =
+        header_end.ok_or_else(|| anyhow!("Invalid HTTP request (no header terminator)"))?;
     let (head, rest) = buf.split_at(header_end);
 
     let head_str = String::from_utf8_lossy(head);
     let mut lines = head_str.split("\r\n").filter(|l| !l.is_empty());
-    let request_line = lines.next().ok_or_else(|| anyhow!("Missing request line"))?;
+    let request_line = lines
+        .next()
+        .ok_or_else(|| anyhow!("Missing request line"))?;
     let mut parts = request_line.split_whitespace();
-    let method = parts.next().ok_or_else(|| anyhow!("Bad request line"))?.to_string();
-    let path = parts.next().ok_or_else(|| anyhow!("Bad request line"))?.to_string();
+    let method = parts
+        .next()
+        .ok_or_else(|| anyhow!("Bad request line"))?
+        .to_string();
+    let path = parts
+        .next()
+        .ok_or_else(|| anyhow!("Bad request line"))?
+        .to_string();
 
     let mut headers = BTreeMap::new();
     let mut content_length: usize = 0;
@@ -1329,10 +1653,18 @@ async fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<(Value, Opt
     req.insert("headers".to_string(), Value::Object(headers));
     req.insert("body".to_string(), Value::Str(body_str));
 
-    Ok((Value::Object(req), if content_length > 0 { Some(body) } else { None }))
+    Ok((
+        Value::Object(req),
+        if content_length > 0 { Some(body) } else { None },
+    ))
 }
 
-async fn write_http_response(stream: &mut TcpStream, resp: Value, _had_body: bool) -> anyhow::Result<()> {
+#[cfg(feature = "sys")]
+async fn write_http_response(
+    stream: &mut TcpStream,
+    resp: Value,
+    _had_body: bool,
+) -> anyhow::Result<()> {
     let mut status: i64 = 200;
     let mut body = String::new();
     let mut extra_headers: BTreeMap<String, String> = BTreeMap::new();
@@ -1386,6 +1718,7 @@ fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+#[cfg(feature = "sys")]
 async fn b_holla(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
         bail!("Holla(host, port)");
@@ -1396,6 +1729,7 @@ async fn b_holla(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Socket(Rc::new(tokio::sync::Mutex::new(stream))))
 }
 
+#[cfg(feature = "sys")]
 async fn b_peek(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("Peek(socket)");
@@ -1411,6 +1745,7 @@ async fn b_peek(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Str(String::from_utf8_lossy(&buf).to_string()))
 }
 
+#[cfg(feature = "sys")]
 async fn b_whisper(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
         bail!("Whisper(socket, text)");
@@ -1425,6 +1760,7 @@ async fn b_whisper(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(feature = "sys")]
 async fn b_dip(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("Dip(socket)");
@@ -1529,6 +1865,7 @@ async fn b_error(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Object(o))
 }
 
+#[cfg(feature = "sys")]
 async fn b_shell_run(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("Shell.run(command)");
@@ -1554,13 +1891,17 @@ async fn b_shell_run(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Object(o))
 }
 
+#[cfg(feature = "sys")]
 async fn b_fs_read(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("FS.readFile(path)");
     }
-    Ok(Value::Str(tokio::fs::read_to_string(args[0].as_string()).await?))
+    Ok(Value::Str(
+        tokio::fs::read_to_string(args[0].as_string()).await?,
+    ))
 }
 
+#[cfg(feature = "sys")]
 async fn b_fs_write(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
         bail!("FS.writeFile(path, text)");
@@ -1569,6 +1910,7 @@ async fn b_fs_write(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(feature = "sys")]
 async fn b_fs_append(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 2 {
         bail!("FS.appendFile(path, text)");
@@ -1582,13 +1924,17 @@ async fn b_fs_append(args: Vec<Value>) -> anyhow::Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(feature = "sys")]
 async fn b_fs_exists(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("FS.exists(path)");
     }
-    Ok(Value::Bool(tokio::fs::try_exists(args[0].as_string()).await?))
+    Ok(Value::Bool(
+        tokio::fs::try_exists(args[0].as_string()).await?,
+    ))
 }
 
+#[cfg(feature = "sys")]
 async fn b_fs_rm(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("FS.rm(path)");
@@ -1610,9 +1956,12 @@ async fn b_proc_cwd(args: Vec<Value>) -> anyhow::Result<Value> {
     if !args.is_empty() {
         bail!("Process.cwd()");
     }
-    Ok(Value::Str(std::env::current_dir()?.to_string_lossy().to_string()))
+    Ok(Value::Str(
+        std::env::current_dir()?.to_string_lossy().to_string(),
+    ))
 }
 
+#[cfg(feature = "sys")]
 async fn b_proc_env(args: Vec<Value>) -> anyhow::Result<Value> {
     if args.len() != 1 {
         bail!("Process.env(name)");
@@ -1623,4 +1972,3 @@ async fn b_proc_env(args: Vec<Value>) -> anyhow::Result<Value> {
         Err(_) => Value::Null,
     })
 }
-
