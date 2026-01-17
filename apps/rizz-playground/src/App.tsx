@@ -125,7 +125,7 @@ function App() {
       <footer className="footer">
         <p>
           RizzScript v0.1.0 | 
-          <a href="https://github.com/rizz-script/rizzz" target="_blank" rel="noopener noreferrer">
+          <a href="https://github.com/rizz-script/rizz" target="_blank" rel="noopener noreferrer">
             GitHub
           </a> | 
           <a href="/docs" target="_blank" rel="noopener noreferrer">

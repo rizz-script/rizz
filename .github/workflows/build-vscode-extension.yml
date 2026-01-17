@@ -1,0 +1,126 @@
+name: Build VS Code Extension
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'apps/rizz-ext/**'
+      - 'apps/rizz-lsp/**'
+      - 'packages/core/**'
+      - '.github/workflows/build-vscode-extension.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'apps/rizz-ext/**'
+      - 'apps/rizz-lsp/**'
+      - 'packages/core/**'
+      - '.github/workflows/build-vscode-extension.yml'
+  release:
+    types: [ created ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Extension
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: apps/rizz-ext/package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build LSP Server
+        run: |
+          cargo build --release --manifest-path apps/rizz-lsp/Cargo.toml
+
+      - name: Determine LSP binary path
+        id: lsp_path
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            echo "path=target/release/rizz-lsp.exe" >> $GITHUB_OUTPUT
+          else
+            echo "path=target/release/rizz-lsp" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Copy LSP binary to extension
+        shell: bash
+        run: |
+          mkdir -p apps/rizz-ext/bin
+          cp ${{ steps.lsp_path.outputs.path }} apps/rizz-ext/bin/rizz-lsp${{ runner.os == 'Windows' && '.exe' || '' }}
+
+      - name: Install extension dependencies
+        working-directory: apps/rizz-ext
+        run: npm ci
+
+      - name: Compile TypeScript
+        working-directory: apps/rizz-ext
+        run: npm run compile
+
+      - name: Package extension
+        working-directory: apps/rizz-ext
+        run: npm run package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rizzscript-extension-${{ matrix.os }}
+          path: apps/rizz-ext/*.vsix
+          retention-days: 30
+
+  release:
+    name: Publish Extension
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Find VSIX file
+        id: find_vsix
+        shell: bash
+        run: |
+          VSIX_FILE=$(find artifacts -name "*.vsix" | head -n 1)
+          echo "file=$VSIX_FILE" >> $GITHUB_OUTPUT
+          echo "Found VSIX: $VSIX_FILE"
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.find_vsix.outputs.file }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to VS Code Marketplace
+        if: false  # Set to true and configure VS Code Marketplace token when ready
+        uses: HaaLeo/publish-vscode-extension@v1
+        with:
+          pat: ${{ secrets.VSCODE_MARKETPLACE_TOKEN }}
+          registryUrl: https://marketplace.visualstudio.com
+          extensionFile: ${{ steps.find_vsix.outputs.file }}

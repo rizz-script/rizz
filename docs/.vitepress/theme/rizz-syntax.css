@@ -1,0 +1,236 @@
+/**
+ * RizzScript Syntax Highlighting
+ * Enhanced CSS-based syntax highlighting for RizzScript code blocks
+ * Uses JavaScript highlighting as base and applies RizzScript-specific styles
+ */
+
+/* RizzScript code block container */
+.rizz-code-block {
+  position: relative;
+  margin: 1.5rem 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--vp-code-block-bg);
+  border: 1px solid var(--vp-c-divider);
+}
+
+.rizz-code-block::before {
+  content: 'RizzScript';
+  position: absolute;
+  top: 0.5rem;
+  right: 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--vp-c-brand-1);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  z-index: 1;
+  padding: 0.25rem 0.5rem;
+  background: var(--vp-c-bg-soft);
+  border-radius: 4px;
+}
+
+.rizz-code-block pre {
+  margin: 0;
+  padding: 1.5rem 1rem;
+  overflow-x: auto;
+}
+
+.rizz-code-block code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+/* Code block container */
+.vp-code-group .shiki,
+div[class*="language-rizz"],
+.rizz-code-block .shiki {
+  background: var(--vp-code-block-bg) !important;
+  margin: 0;
+}
+
+/* RizzScript-specific syntax highlighting */
+div[class*="language-rizz"] code,
+pre[class*="language-rizz"] code,
+.rizz-code-block code {
+  color: var(--vp-c-text-1);
+}
+
+/* RizzScript-specific keyword highlighting */
+/* These styles enhance JavaScript highlighting for RizzScript keywords */
+
+/* Control Flow Keywords (Maybe, Unless, Crazy, etc.) */
+.rizz-code-block code .token.keyword.control-flow,
+.rizz-code-block code .token.keyword[data-keyword="maybe"],
+.rizz-code-block code .token.keyword[data-keyword="unless"],
+.rizz-code-block code .token.keyword[data-keyword="crazy"],
+.rizz-code-block code .token.keyword[data-keyword="attempt"],
+.rizz-code-block code .token.keyword[data-keyword="eww"],
+.rizz-code-block code .token.keyword[data-keyword="hawktuah"],
+.rizz-code-block code .token.keyword[data-keyword="vibe"],
+.rizz-code-block code .token.keyword[data-keyword="chill"] {
+  color: #c792ea !important;
+  font-weight: 600;
+}
+
+/* Storage Keywords (Ayo, Yoo) */
+.rizz-code-block code .token.keyword.storage,
+.rizz-code-block code .token.keyword[data-keyword="ayo"],
+.rizz-code-block code .token.keyword[data-keyword="yoo"] {
+  color: #82aaff !important;
+  font-weight: 600;
+}
+
+/* Function Declaration (Bruh) */
+.rizz-code-block code .token.keyword[data-keyword="bruh"],
+.rizz-code-block code .token.keyword.function {
+  color: #82aaff !important;
+  font-weight: 600;
+}
+
+/* Return/Output (Rizz) */
+.rizz-code-block code .token.keyword[data-keyword="rizz"],
+.rizz-code-block code .token.keyword.return {
+  color: #c792ea !important;
+  font-weight: 600;
+}
+
+/* Built-in Functions */
+.rizz-code-block code .token.function.builtin,
+.rizz-code-block code .token.support.function {
+  color: #ffcb6b !important;
+}
+
+/* HTTP Functions (Spit, Yeet, Flex, Ghost) */
+.rizz-code-block code .token.function[data-function="spit"],
+.rizz-code-block code .token.function[data-function="yeet"],
+.rizz-code-block code .token.function[data-function="flex"],
+.rizz-code-block code .token.function[data-function="ghost"] {
+  color: #f78c6c !important;
+  font-weight: 500;
+}
+
+/* TCP Functions (Listen, Holla, Peek, Whisper, Dip) */
+.rizz-code-block code .token.function[data-function="listen"],
+.rizz-code-block code .token.function[data-function="holla"],
+.rizz-code-block code .token.function[data-function="peek"],
+.rizz-code-block code .token.function[data-function="whisper"],
+.rizz-code-block code .token.function[data-function="dip"] {
+  color: #c3e88d !important;
+  font-weight: 500;
+}
+
+/* I/O Functions (Snag, Stash, KeepAdding, Trash, FileExists) */
+.rizz-code-block code .token.function[data-function="snag"],
+.rizz-code-block code .token.function[data-function="stash"],
+.rizz-code-block code .token.function[data-function="keepadding"],
+.rizz-code-block code .token.function[data-function="trash"],
+.rizz-code-block code .token.function[data-function="fileexists"] {
+  color: #89ddff !important;
+  font-weight: 500;
+}
+
+/* JSON Functions (Decode, Encode) */
+.rizz-code-block code .token.function[data-function="decode"],
+.rizz-code-block code .token.function[data-function="encode"] {
+  color: #ffcb6b !important;
+  font-weight: 500;
+}
+
+/* Regex Functions (Hunt, Swap, Matches, Split) */
+.rizz-code-block code .token.function[data-function="hunt"],
+.rizz-code-block code .token.function[data-function="swap"],
+.rizz-code-block code .token.function[data-function="matches"],
+.rizz-code-block code .token.function[data-function="split"] {
+  color: #c792ea !important;
+  font-weight: 500;
+}
+
+/* Strings */
+.rizz-code-block code .token.string {
+  color: #c3e88d !important;
+}
+
+/* Numbers */
+.rizz-code-block code .token.number {
+  color: #f78c6c !important;
+}
+
+/* Comments */
+.rizz-code-block code .token.comment {
+  color: #546e7a !important;
+  font-style: italic;
+}
+
+/* Operators */
+.rizz-code-block code .token.operator {
+  color: #89ddff !important;
+}
+
+/* Regex patterns */
+.rizz-code-block code .token.regexp,
+.rizz-code-block code .token.string.regexp {
+  color: #c792ea !important;
+}
+
+/* Constants */
+.rizz-code-block code .token.constant {
+  color: #f78c6c !important;
+}
+
+/* Variables */
+.rizz-code-block code .token.variable {
+  color: #eeffff !important;
+}
+
+/* Punctuation */
+.rizz-code-block code .token.punctuation {
+  color: #89ddff !important;
+  opacity: 0.8;
+}
+
+/**
+ * Enhanced RizzScript keyword detection
+ * JavaScript highlighting provides a good base, and we enhance it with CSS
+ */
+
+/* Apply enhanced styling for RizzScript-specific tokens */
+.rizz-code-block code {
+  font-variant-ligatures: common-ligatures;
+  tab-size: 2;
+}
+
+/* Enhance function identifiers that are likely RizzScript built-ins */
+/* Note: These will be styled by JavaScript highlighting, but we can enhance them */
+.rizz-code-block code .token.function-call {
+  font-weight: 500;
+}
+
+/* Improve readability */
+.rizz-code-block code .token.property {
+  color: #82aaff !important;
+}
+
+/* Better contrast for operators */
+.rizz-code-block code .token.operator {
+  opacity: 1 !important;
+}
+
+/* Style for object properties */
+.rizz-code-block code .token.property-access {
+  color: #eeffff !important;
+}
+
+/* Copy button styling (if VitePress adds one) */
+.rizz-code-block .vp-code-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 4rem;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.rizz-code-block:hover .vp-code-copy {
+  opacity: 1;
+}

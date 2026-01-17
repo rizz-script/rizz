@@ -19,3 +19,6 @@ check:
     cargo clippy --all-targets --all-features -- -D warnings
     cargo fmt --all -- --check
     cargo test --all --all-features
+
+docs:
+    cd docs && bun run dev
